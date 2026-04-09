@@ -1,0 +1,53 @@
+@layer utilities {
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .error {
+    color: #cc2222;
+    margin: 0.4rem 0 0;
+    font-size: 0.875rem;
+  }
+
+  .loading {
+    color: var(--color-muted);
+    margin: 0.4rem 0 0;
+    font-size: 0.875rem;
+  }
+
+  .info {
+    color: var(--color-muted);
+    margin: 0.4rem 0 0;
+    font-size: 0.875rem;
+  }
+
+  .btn {
+    padding: 0.6rem 1.2rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    background: var(--color-accent);
+    color: #ffffff;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity 0.15s;
+  }
+
+  .btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .btn:not(:disabled):hover {
+    opacity: 0.85;
+  }
+}

@@ -1,0 +1,7 @@
+[build]
+  command = "curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh && npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+  RUST_LOG = "error"
