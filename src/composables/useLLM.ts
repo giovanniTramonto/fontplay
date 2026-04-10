@@ -39,7 +39,10 @@ async function askNetlify(property: string): Promise<MoodResult> {
 
   const data = await response.json()
   if (data.error) throw new Error(data.error)
-  return { transforms: data.transforms, colr: data.colr }
+  return {
+    transforms: data.transforms,
+    colr: { ...data.colr, effects: new Set(data.colr.active ?? []) },
+  }
 }
 
 async function askOllama(property: string): Promise<MoodResult> {
