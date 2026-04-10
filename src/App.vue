@@ -21,6 +21,7 @@ interface RenderedGlyph {
 const glyphs = ref<RenderedGlyph[]>([])
 const appliedTransforms = ref<Transform[]>([])
 const activeProperty = ref<string | null>(null)
+const isColrV1Enabled = ref(false)
 const isAiLoading = ref(false)
 const aiError = ref<string | null>(null)
 const fontName = ref<string | null>(null)
@@ -100,7 +101,7 @@ async function onStyle(property: string | null) {
       </template>
       <template v-else>
         <div class="font-bar">
-          <p aria-live="polite" class="info">
+          <p aria-live="polite" class="font-bar-info text-size-m">
             {{ fontName }} — {{ fontInfo.glyphCount }} glyphs · {{ fontInfo.unitsPerEm }} UPM
           </p>
           <button class="btn" aria-label="Remove font" @click="onRemoveFont">✕</button>
@@ -116,6 +117,12 @@ async function onStyle(property: string | null) {
 
     <section v-if="fontInfo && !isFontLoading" aria-label="Glyph display">
       <GlyphDisplay :glyphs="displayGlyphs" />
+      <div class="display-options">
+        <label class="colrv1-toggle text-size-m">
+          <input v-model="isColrV1Enabled" type="checkbox" />
+          Enable COLRv1
+        </label>
+      </div>
     </section>
 
     <section v-if="fontInfo && !isFontLoading" aria-label="Style">
@@ -134,7 +141,21 @@ async function onStyle(property: string | null) {
   gap: 0.5rem;
 }
 
-.font-bar .info {
+.display-options {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
+}
+
+.colrv1-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.font-bar-info {
   margin: 0;
 }
 </style>
