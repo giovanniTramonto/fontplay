@@ -1,4 +1,4 @@
-import type { ColrConfig, ColrEffect, Transform } from '#shared/types'
+import type { ColrConfig, ColrEffect, Transform } from '../types'
 
 export interface LLMResult {
   transforms: Transform[]
