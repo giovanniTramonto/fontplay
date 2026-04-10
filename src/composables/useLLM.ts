@@ -1,9 +1,14 @@
-import type { Transform } from '#shared/types'
 import { SYSTEM_PROMPT } from '#shared/prompts/systemPrompt'
-import { extractTransforms } from '#shared/utils/extractSvg'
+import type { ColrConfig, Transform } from '#shared/types'
+import { extractResult } from '#shared/utils/extractSvg'
 
 interface OllamaResponse {
   message: { content: string }
+}
+
+export interface MoodResult {
+  transforms: Transform[]
+  colr: ColrConfig
 }
 
 function getSessionId(): string {
@@ -15,12 +20,12 @@ function getSessionId(): string {
   return id
 }
 
-export async function askLLM(property: string): Promise<Transform[]> {
+export async function askLLM(property: string): Promise<MoodResult> {
   if (import.meta.env.VITE_OLLAMA_URL) return askOllama(property)
   return askNetlify(property)
 }
 
-async function askNetlify(property: string): Promise<Transform[]> {
+async function askNetlify(property: string): Promise<MoodResult> {
   const response = await fetch('/api/ask', {
     method: 'POST',
     headers: {
@@ -34,10 +39,10 @@ async function askNetlify(property: string): Promise<Transform[]> {
 
   const data = await response.json()
   if (data.error) throw new Error(data.error)
-  return data.transforms as Transform[]
+  return { transforms: data.transforms, colr: data.colr }
 }
 
-async function askOllama(property: string): Promise<Transform[]> {
+async function askOllama(property: string): Promise<MoodResult> {
   const response = await fetch(import.meta.env.VITE_OLLAMA_URL as string, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -55,8 +60,8 @@ async function askOllama(property: string): Promise<Transform[]> {
   if (!response.ok) throw new Error(`Ollama error: ${response.status} ${response.statusText}`)
 
   const data: OllamaResponse = await response.json()
-  const transforms = extractTransforms(data.message.content)
-  if (transforms !== null) return transforms
+  const result = extractResult(data.message.content)
+  if (result !== null) return result
 
-  throw new Error(`No valid transforms received. Response: "${data.message.content.slice(0, 120)}…"`)
+  throw new Error(`No valid result received. Response: "${data.message.content.slice(0, 120)}…"`)
 }

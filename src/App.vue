@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { DEFAULT_TEXT } from '#shared/constants'
+import type { ColrConfig, Transform } from '#shared/types'
 import FontUpload from '@/components/FontUpload.vue'
 import GlyphDisplay from '@/components/GlyphDisplay.vue'
 import LetterInput from '@/components/LetterInput.vue'
@@ -7,11 +9,15 @@ import MoodButtons from '@/components/MoodButtons.vue'
 import { type GlyphSvg, useFontWasm } from '@/composables/useFontWasm'
 import { askLLM } from '@/composables/useLLM'
 import { applyTransformsToPath } from '@/utils/transformPath'
-import type { Transform } from '#shared/types'
-import { DEFAULT_TEXT } from '#shared/constants'
 
-const { fontInfo, isLoading: isFontLoading, error: fontError, loadFont, getGlyphSvg, resetFont } =
-  useFontWasm()
+const {
+  fontInfo,
+  isLoading: isFontLoading,
+  error: fontError,
+  loadFont,
+  getGlyphSvg,
+  resetFont,
+} = useFontWasm()
 
 interface RenderedGlyph {
   char: string
@@ -20,8 +26,9 @@ interface RenderedGlyph {
 
 const glyphs = ref<RenderedGlyph[]>([])
 const appliedTransforms = ref<Transform[]>([])
+const colrConfig = ref<ColrConfig>({ effects: new Set() })
+const isColrEnabled = ref(true)
 const activeProperty = ref<string | null>(null)
-const isColrV1Enabled = ref(false)
 const isAiLoading = ref(false)
 const aiError = ref<string | null>(null)
 const fontName = ref<string | null>(null)
@@ -48,6 +55,7 @@ function onRemoveFont() {
   fontName.value = null
   glyphs.value = []
   appliedTransforms.value = []
+  colrConfig.value = { effects: new Set() }
   activeProperty.value = null
   aiError.value = null
 }
@@ -55,13 +63,14 @@ function onRemoveFont() {
 async function onWrite(letters: string) {
   aiError.value = null
   appliedTransforms.value = []
+  colrConfig.value = { effects: new Set() }
   activeProperty.value = null
   const unique = [...new Set([...letters])]
   const results = await Promise.all(
     unique.map(async (char) => {
       const svg = await getGlyphSvg(char)
       return svg ? { char, svg } : null
-    })
+    }),
   )
   glyphs.value = [...letters].flatMap((char) => {
     const found = results.find((r) => r?.char === char)
@@ -72,6 +81,7 @@ async function onWrite(letters: string) {
 async function onStyle(property: string | null) {
   if (property === null) {
     appliedTransforms.value = []
+    colrConfig.value = { effects: new Set() }
     activeProperty.value = null
     return
   }
@@ -79,7 +89,9 @@ async function onStyle(property: string | null) {
   isAiLoading.value = true
   aiError.value = null
   try {
-    appliedTransforms.value = await askLLM(property)
+    const result = await askLLM(property)
+    appliedTransforms.value = result.transforms
+    colrConfig.value = result.colr
     activeProperty.value = property
   } catch (e) {
     aiError.value = e instanceof Error ? e.message : String(e)
@@ -116,10 +128,10 @@ async function onStyle(property: string | null) {
     </section>
 
     <section v-if="fontInfo && !isFontLoading" aria-label="Glyph display">
-      <GlyphDisplay :glyphs="displayGlyphs" />
+      <GlyphDisplay :glyphs="displayGlyphs" :colr-config="isColrEnabled ? colrConfig : undefined" />
       <div class="display-options">
         <label class="colrv1-toggle text-size-m">
-          <input v-model="isColrV1Enabled" type="checkbox" />
+          <input v-model="isColrEnabled" type="checkbox" />
           Enable COLRv1
         </label>
       </div>
@@ -141,6 +153,10 @@ async function onStyle(property: string | null) {
   gap: 0.5rem;
 }
 
+.font-bar-info {
+  margin: 0;
+}
+
 .display-options {
   display: flex;
   justify-content: flex-end;
@@ -154,9 +170,4 @@ async function onStyle(property: string | null) {
   cursor: pointer;
   user-select: none;
 }
-
-.font-bar-info {
-  margin: 0;
-}
 </style>
-

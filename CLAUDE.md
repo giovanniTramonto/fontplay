@@ -36,7 +36,7 @@ src/
 ├── stylesheets/
 │   ├── index.css            # @layer declarations + imports
 │   ├── base.css             # @layer base – body, main, h1, CSS custom properties
-│   └── utilities.css        # @layer utilities – .btn, .sr-only, .error, .loading, .info
+│   └── utilities.css        # @layer utilities – .btn, .sr-only, .error, .loading, .text-size-m
 ├── App.vue                  # Root – orchestrates all state
 ├── main.ts
 └── env.d.ts
@@ -45,7 +45,7 @@ shared/
 ├── constants.ts             # DEFAULT_TEXT
 ├── types.ts                 # Transform union type
 ├── prompts/systemPrompt.ts  # Shared AI system prompt
-└── utils/extractSvg.ts      # extractTransforms() – parse JSON from LLM response
+└── utils/extractSvg.ts      # extractResult() – parse JSON from LLM response
 netlify/functions/ask.ts     # Netlify Function – Anthropic SDK (production)
 ```
 
@@ -86,13 +86,25 @@ All AI calls go through `askLLM(property)` in `useLLM.ts`:
 - `VITE_OLLAMA_URL` is not set → calls the Netlify Function at `/api/ask`
 
 ## AI Response Format
-The LLM returns a JSON object with a `transforms` array:
+The LLM returns a JSON object with transforms and visual effects:
 ```json
-{"transforms": [{"type": "scaleX", "factor": 0.75}, {"type": "shear", "angle": -10}]}
+{
+  "transforms": [{"type": "scaleX", "factor": 0.8}, {"type": "shear", "angle": -10}],
+  "effects": {
+    "active": ["shadow", "fill"],
+    "fillColor": "#e63946",
+    "outlineColor": "#2563eb",
+    "blockColor": "#111111",
+    "gradientColors": ["#f97316", "#8b5cf6"]
+  }
+}
 ```
 Available transform types: `scaleX`, `scaleY`, `shear`, `jitter`, `wave` — defined in `shared/types.ts`.
 
-`extractTransforms()` in `shared/utils/extractSvg.ts` parses the raw LLM output, with fallback
+Available effects: `shadow`, `3d-blocks`, `outline`, `fill`, `gradient` — rendered as SVG paint
+layers in `GlyphDisplay.vue` (COLRv1-inspired). `fill` and `gradient` are mutually exclusive.
+
+`extractResult()` in `shared/utils/extractSvg.ts` parses the raw LLM output, with fallback
 recovery for truncated responses.
 
 JavaScript applies the transforms to the actual SVG path coordinates via `applyTransformsToPath()`

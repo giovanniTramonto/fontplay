@@ -6,7 +6,7 @@ Upload a font, see its glyphs rendered as SVG, and transform them with AI-powere
 
 1. **Upload** a font file (.ttf / .otf / .woff / .woff2)
 2. **Write** any letters — they render as SVG paths extracted directly from the font
-3. **Choose a mood** (Modern, Futuristic, Playful, Edgy, Cool) — an LLM picks a creative combination of geometric transforms and applies them to the actual path coordinates
+3. **Choose a mood** (Modern, Futuristic, Playful, Edgy, Cool) — an LLM picks geometric transforms and visual effects (shadow, 3D blocks, fill, gradient, outline) and applies them to the actual path coordinates
 
 Unlike CSS transforms, fontplay modifies the real glyph path data — making results exportable as new fonts in the future.
 
@@ -53,15 +53,24 @@ The app calls Ollama directly from the browser when `VITE_OLLAMA_URL` is set. Wi
 
 ## How the AI works
 
-Each mood button sends the mood name to the LLM. The LLM responds with a small JSON array of transforms:
+Each mood button sends the mood name to the LLM. The LLM responds with a JSON object containing geometric transforms and visual effects:
 
 ```json
-{"transforms": [{"type": "scaleX", "factor": 0.75}, {"type": "shear", "angle": -10}]}
+{
+  "transforms": [{"type": "scaleX", "factor": 0.75}, {"type": "shear", "angle": -10}],
+  "effects": {
+    "active": ["shadow", "fill"],
+    "fillColor": "#e63946",
+    "gradientColors": ["#f97316", "#8b5cf6"]
+  }
+}
 ```
 
 Available transforms: `scaleX`, `scaleY`, `shear`, `jitter`, `wave`
 
-JavaScript applies these to every coordinate in the SVG path data — the glyph shapes actually change, not just their CSS appearance.
+Available effects: `shadow`, `3d-blocks`, `outline`, `fill`, `gradient` — rendered as SVG paint layers (COLRv1-inspired). Enable them via the "Enable COLRv1" checkbox.
+
+JavaScript applies transforms to every coordinate in the SVG path data — the glyph shapes actually change, not just their CSS appearance.
 
 ## Deployment (Netlify)
 

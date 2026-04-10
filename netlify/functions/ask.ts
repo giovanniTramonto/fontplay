@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { getStore } from '@netlify/blobs'
 import { MAX_PROMPT_LENGTH, MAX_SESSION_REQUESTS } from '#shared/config'
 import { SYSTEM_PROMPT } from '#shared/prompts/systemPrompt'
-import { extractTransforms } from '#shared/utils/extractSvg'
+import { extractResult } from '#shared/utils/extractSvg'
 
 const client = new Anthropic({
   defaultHeaders: { 'anthropic-beta': 'prompt-caching-2024-07-31' },
@@ -44,25 +44,37 @@ export default async (req: Request) => {
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 256,
+    max_tokens: 512,
     system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
     messages: [{ role: 'user', content: property }],
   })
 
   const raw = message.content[0].type === 'text' ? message.content[0].text : ''
-  const transforms = extractTransforms(raw)
+  const result = extractResult(raw)
 
-  if (transforms === null) {
+  if (result === null) {
     return new Response(
-      JSON.stringify({ error: `No valid transforms received. Response: "${raw.slice(0, 120)}…"` }),
+      JSON.stringify({ error: `No valid result received. Response: "${raw.slice(0, 120)}…"` }),
       { status: 422, headers: { 'Content-Type': 'application/json' } },
     )
   }
 
-  return new Response(JSON.stringify({ transforms }), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  })
+  return new Response(
+    JSON.stringify({
+      transforms: result.transforms,
+      colr: {
+        active: [...result.colr.effects],
+        fillColor: result.colr.fillColor,
+        gradientColors: result.colr.gradientColors,
+        outlineColor: result.colr.outlineColor,
+        blockColor: result.colr.blockColor,
+      },
+    }),
+    {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    },
+  )
 }
 
 export const config = { path: '/api/ask' }

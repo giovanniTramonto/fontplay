@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { computed, ref } from 'vue'
 import { DEFAULT_TEXT } from '#shared/constants'
 
 const emit = defineEmits<{

@@ -52,14 +52,17 @@ function tokenize(d: string): PathToken[] {
   const parts = d.match(/[MLCQZHVmlcqzhv][^MLCQZHVmlcqzhv]*/g) ?? []
   return parts.map((part) => ({
     cmd: part[0],
-    args: part
-      .slice(1)
-      .match(/-?[\d.]+(?:[eE][+-]?\d+)?/g)
-      ?.map(Number) ?? [],
+    args:
+      part
+        .slice(1)
+        .match(/-?[\d.]+(?:[eE][+-]?\d+)?/g)
+        ?.map(Number) ?? [],
   }))
 }
 
-export function getPathBounds(d: string): { minX: number; minY: number; maxX: number; maxY: number } | null {
+export function getPathBounds(
+  d: string,
+): { minX: number; minY: number; maxX: number; maxY: number } | null {
   let minX = Number.POSITIVE_INFINITY
   let minY = Number.POSITIVE_INFINITY
   let maxX = Number.NEGATIVE_INFINITY
