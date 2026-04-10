@@ -6,7 +6,7 @@ import LetterInput from '@/components/LetterInput.vue'
 import MoodButtons from '@/components/MoodButtons.vue'
 import { type GlyphSvg, useFontWasm } from '@/composables/useFontWasm'
 import { askLLM } from '@/composables/useLLM'
-import { applyTransformsToPath, getPathBounds } from '@/utils/transformPath'
+import { applyTransformsToPath } from '@/utils/transformPath'
 import type { Transform } from '#shared/types'
 import { DEFAULT_TEXT } from '#shared/constants'
 
@@ -29,11 +29,7 @@ const displayGlyphs = computed(() => {
   if (!appliedTransforms.value.length) return glyphs.value
   return glyphs.value.map(({ char, svg }) => {
     const d = applyTransformsToPath(svg.d, appliedTransforms.value, char.codePointAt(0) ?? 0)
-    const bounds = getPathBounds(d)
-    const viewBox = bounds
-      ? `${bounds.minX} ${bounds.minY} ${bounds.maxX - bounds.minX} ${bounds.maxY - bounds.minY}`
-      : svg.viewBox
-    return { char, svg: { ...svg, d, viewBox } }
+    return { char, svg: { ...svg, d } }
   })
 })
 
