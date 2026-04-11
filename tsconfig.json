@@ -13,7 +13,8 @@
       "@/*": ["src/*"],
       "#shared/*": ["shared/*"]
     },
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "noEmit": true
   },
   "include": ["src/**/*", "shared/**/*", "netlify/**/*", "vite.config.ts"]
 }
