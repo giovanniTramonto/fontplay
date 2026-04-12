@@ -155,7 +155,7 @@ function downloadFont() {
     </section>
 
     <section v-if="fontInfo && !isFontLoading" aria-label="Glyph display">
-      <GlyphDisplay :text="text" :font-family="displayFontFamily" />
+      <GlyphDisplay :text="text" :fontFamily="displayFontFamily" />
       <div class="display-options">
         <label class="colrv1-toggle text-size-m">
           <input v-model="isColrEnabled" type="checkbox" />
@@ -165,7 +165,7 @@ function downloadFont() {
     </section>
 
     <section v-if="fontInfo && !isFontLoading" aria-label="Style">
-      <MoodButtons :is-loading="isAiLoading" :active-property="activeProperty" @style="onStyle" />
+      <MoodButtons :isLoading="isAiLoading" :activeProperty="activeProperty" @style="onStyle" />
       <p v-if="isAiLoading" aria-live="polite" class="loading">Generating style…</p>
       <p v-else-if="aiError" role="alert" class="error">{{ aiError }}</p>
     </section>
