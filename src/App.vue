@@ -1,103 +1,130 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { DEFAULT_TEXT } from '#shared/constants'
-import type { ColrConfig, Transform } from '#shared/types'
 import FontUpload from '@/components/FontUpload.vue'
 import GlyphDisplay from '@/components/GlyphDisplay.vue'
 import LetterInput from '@/components/LetterInput.vue'
 import MoodButtons from '@/components/MoodButtons.vue'
-import { type GlyphSvg, useFontWasm } from '@/composables/useFontWasm'
+import { useFontWasm } from '@/composables/useFontWasm'
 import { askLLM } from '@/composables/useLLM'
-import { applyTransformsToPath } from '@/utils/transformPath'
 
 const {
+  fontData,
   fontInfo,
   isLoading: isFontLoading,
   error: fontError,
   loadFont,
-  getGlyphSvg,
+  styleFont,
   resetFont,
 } = useFontWasm()
 
-interface RenderedGlyph {
-  char: string
-  svg: GlyphSvg
-}
-
-const glyphs = ref<RenderedGlyph[]>([])
-const appliedTransforms = ref<Transform[]>([])
-const colrConfig = ref<ColrConfig>({ effects: new Set() })
-const isColrEnabled = ref(true)
+const text = ref(DEFAULT_TEXT)
 const activeProperty = ref<string | null>(null)
 const isAiLoading = ref(false)
 const aiError = ref<string | null>(null)
 const fontName = ref<string | null>(null)
 
-const displayGlyphs = computed(() => {
-  if (!appliedTransforms.value.length) return glyphs.value
-  return glyphs.value.map(({ char, svg }) => {
-    const d = applyTransformsToPath(svg.d, appliedTransforms.value, char.codePointAt(0) ?? 0)
-    return { char, svg: { ...svg, d } }
-  })
-})
+// Styled font bytes — null means use original font
+const styledFontBytes = ref<Uint8Array | null>(null)
+const isColrEnabled = ref(true)
+
+// Unique CSS font-family name, incremented on each font upload to avoid cache issues
+let fontCounter = 0
+const baseFontFamily = ref<string | null>(null)
+const styledFontFamily = ref<string | null>(null)
+
+// The font-family shown in GlyphDisplay: styled if available, else original
+const displayFontFamily = computed(() => styledFontFamily.value ?? baseFontFamily.value)
+
+// Inject @font-face into document head
+function injectFontFace(family: string, bytes: Uint8Array) {
+  const id = `fontplay-face-${family}`
+  document.getElementById(id)?.remove()
+  const blob = new Blob([new Uint8Array(bytes)], { type: 'font/ttf' })
+  const url = URL.createObjectURL(blob)
+  const style = document.createElement('style')
+  style.id = id
+  style.textContent = `@font-face { font-family: '${family}'; src: url('${url}') format('truetype'); font-display: block; }`
+  document.head.appendChild(style)
+}
 
 async function onFontUpload(file: File) {
   aiError.value = null
-  glyphs.value = []
-  appliedTransforms.value = []
+  styledFontBytes.value = null
+  styledFontFamily.value = null
+  activeProperty.value = null
   fontName.value = file.name.replace(/\.[^.]+$/, '')
+
   await loadFont(file)
-  await onWrite(DEFAULT_TEXT)
+
+  if (fontData.value) {
+    fontCounter++
+    const family = `fontplay-base-${fontCounter}`
+    baseFontFamily.value = family
+    injectFontFace(family, fontData.value)
+  }
+
+  text.value = DEFAULT_TEXT
 }
 
 function onRemoveFont() {
   resetFont()
   fontName.value = null
-  glyphs.value = []
-  appliedTransforms.value = []
-  colrConfig.value = { effects: new Set() }
+  baseFontFamily.value = null
+  styledFontFamily.value = null
+  styledFontBytes.value = null
   activeProperty.value = null
   aiError.value = null
 }
 
-async function onWrite(letters: string) {
-  aiError.value = null
-  appliedTransforms.value = []
-  colrConfig.value = { effects: new Set() }
-  activeProperty.value = null
-  const unique = [...new Set([...letters])]
-  const results = await Promise.all(
-    unique.map(async (char) => {
-      const svg = await getGlyphSvg(char)
-      return svg ? { char, svg } : null
-    }),
-  )
-  glyphs.value = [...letters].flatMap((char) => {
-    const found = results.find((r) => r?.char === char)
-    return found ? [found] : []
-  })
+function onWrite(letters: string) {
+  text.value = letters
 }
 
 async function onStyle(property: string | null) {
   if (property === null) {
-    appliedTransforms.value = []
-    colrConfig.value = { effects: new Set() }
+    styledFontBytes.value = null
+    styledFontFamily.value = null
     activeProperty.value = null
     return
   }
-  if (!glyphs.value.length) return
+  if (!fontInfo.value) return
+
   isAiLoading.value = true
   aiError.value = null
   try {
     const result = await askLLM(property)
-    appliedTransforms.value = result.transforms
-    colrConfig.value = result.colr
+    const colr = isColrEnabled.value
+      ? result.colr
+      : { effects: new Set<import('#shared/types').ColrEffect>() }
+    const bytes = await styleFont(result.transforms, colr, property)
+    if (bytes) {
+      styledFontBytes.value = bytes
+      fontCounter++
+      const family = `fontplay-styled-${fontCounter}`
+      styledFontFamily.value = family
+      injectFontFace(family, bytes)
+    }
     activeProperty.value = property
   } catch (e) {
     aiError.value = e instanceof Error ? e.message : String(e)
   } finally {
     isAiLoading.value = false
   }
+}
+
+function downloadFont() {
+  const bytes = styledFontBytes.value
+  if (!bytes) return
+  const blob = new Blob([new Uint8Array(bytes)], { type: 'font/ttf' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${fontName.value ?? 'fontplay'}-${activeProperty.value ?? 'styled'}.ttf`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }
 </script>
 
@@ -128,7 +155,7 @@ async function onStyle(property: string | null) {
     </section>
 
     <section v-if="fontInfo && !isFontLoading" aria-label="Glyph display">
-      <GlyphDisplay :glyphs="displayGlyphs" :colr-config="isColrEnabled ? colrConfig : undefined" />
+      <GlyphDisplay :text="text" :font-family="displayFontFamily" />
       <div class="display-options">
         <label class="colrv1-toggle text-size-m">
           <input v-model="isColrEnabled" type="checkbox" />
@@ -141,6 +168,12 @@ async function onStyle(property: string | null) {
       <MoodButtons :is-loading="isAiLoading" :active-property="activeProperty" @style="onStyle" />
       <p v-if="isAiLoading" aria-live="polite" class="loading">Generating style…</p>
       <p v-else-if="aiError" role="alert" class="error">{{ aiError }}</p>
+    </section>
+
+    <section v-if="styledFontBytes" aria-label="Export">
+      <button class="btn" @click="downloadFont">
+        Download {{ fontName }}-{{ activeProperty }}.ttf
+      </button>
     </section>
   </main>
 </template>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { DEFAULT_TEXT } from '#shared/constants'
 
 const emit = defineEmits<{
@@ -7,22 +7,20 @@ const emit = defineEmits<{
 }>()
 
 const letters = ref(DEFAULT_TEXT)
-
 const isCustom = computed(() => letters.value.trim() !== DEFAULT_TEXT)
 
-function onSubmit() {
-  const trimmed = letters.value.trim()
+watch(letters, (val) => {
+  const trimmed = val.trim()
   if (trimmed) emit('write', trimmed)
-}
+})
 
 function onReset() {
   letters.value = DEFAULT_TEXT
-  emit('write', DEFAULT_TEXT)
 }
 </script>
 
 <template>
-  <form class="letter-input" @submit.prevent="onSubmit">
+  <div class="letter-input">
     <label for="letter-field" class="sr-only">Letters to display</label>
     <input
       id="letter-field"
@@ -32,9 +30,8 @@ function onReset() {
       maxlength="100"
       class="field"
     />
-    <button type="submit" :disabled="!letters.trim()" class="btn">Write</button>
     <button v-if="isCustom" type="button" class="btn" @click="onReset">Reset</button>
-  </form>
+  </div>
 </template>
 
 <style scoped>

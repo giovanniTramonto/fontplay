@@ -18,10 +18,7 @@ function onDrop(event: DragEvent) {
   const file = event.dataTransfer?.files[0]
   if (
     file &&
-    (file.name.endsWith('.ttf') ||
-      file.name.endsWith('.otf') ||
-      file.name.endsWith('.woff2') ||
-      file.name.endsWith('.woff'))
+    (file.name.endsWith('.ttf') || file.name.endsWith('.otf') || file.name.endsWith('.woff2'))
   ) {
     emit('upload', file)
   }
@@ -46,12 +43,12 @@ function onDragLeave() {
   >
     <input
       type="file"
-      accept=".ttf,.otf,.woff,.woff2"
+      accept=".ttf,.otf,.woff2"
       class="sr-only"
       @change="onFileChange"
     />
     <span>Drop a font file here or <strong>click to upload</strong></span>
-    <span class="hint">.ttf · .otf · .woff · .woff2</span>
+    <span class="hint">.ttf · .otf · .woff2</span>
   </label>
 </template>
 

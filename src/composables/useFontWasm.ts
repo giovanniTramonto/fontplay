@@ -1,13 +1,13 @@
 import { ref, shallowRef } from 'vue'
+import type { ColrConfig, Transform } from '#shared/types'
 
-// Lazily loaded WASM module — built by wasm-pack into src/wasm/
 // biome-ignore lint/suspicious/noExplicitAny: WASM module types are generated at build time
 let wasmModule: any = null
 
 async function loadWasm() {
   if (wasmModule) return wasmModule
   const mod = await import('@/wasm/fontplay.js')
-  await mod.default() // run wasm-bindgen init
+  await mod.default()
   wasmModule = mod
   return mod
 }
@@ -17,14 +17,6 @@ export interface FontInfo {
   ascender: number
   descender: number
   glyphCount: number
-}
-
-export interface GlyphSvg {
-  d: string
-  viewBox: string
-  advanceWidth: number
-  height: number
-  found: boolean
 }
 
 export function useFontWasm() {
@@ -38,8 +30,7 @@ export function useFontWasm() {
     error.value = null
     try {
       const wasm = await loadWasm()
-      const buffer = await file.arrayBuffer()
-      const bytes = new Uint8Array(buffer)
+      const bytes = new Uint8Array(await file.arrayBuffer())
       const info: FontInfo = wasm.get_font_info(bytes)
       fontData.value = bytes
       fontInfo.value = info
@@ -52,18 +43,21 @@ export function useFontWasm() {
     }
   }
 
-  async function getGlyphSvg(char: string): Promise<GlyphSvg | null> {
+  async function styleFont(transforms: Transform[], colr: ColrConfig, mood?: string): Promise<Uint8Array | null> {
     if (!fontData.value) return null
-    const codePoint = char.codePointAt(0)
-    if (codePoint === undefined) return null
-    try {
-      const wasm = await loadWasm()
-      const result: GlyphSvg = wasm.char_to_svg(fontData.value, codePoint)
-      return result
-    } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e)
-      return null
-    }
+    const wasm = await loadWasm()
+    const request = JSON.stringify({
+      transforms,
+      colr: {
+        effects: [...colr.effects],
+        fillColor: colr.fillColor ?? null,
+        gradientColors: colr.gradientColors ?? null,
+        blockColor: colr.blockColor ?? null,
+      },
+      mood: mood ?? null,
+    })
+    const bytes: Uint8Array = wasm.style_font(fontData.value, request)
+    return bytes
   }
 
   function resetFont() {
@@ -72,5 +66,5 @@ export function useFontWasm() {
     error.value = null
   }
 
-  return { fontData, fontInfo, isLoading, error, loadFont, getGlyphSvg, resetFont }
+  return { fontData, fontInfo, isLoading, error, loadFont, styleFont, resetFont }
 }
