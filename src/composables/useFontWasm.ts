@@ -43,7 +43,11 @@ export function useFontWasm() {
     }
   }
 
-  async function styleFont(transforms: Transform[], colr: ColrConfig, mood?: string): Promise<Uint8Array | null> {
+  async function styleFont(
+    transforms: Transform[],
+    colr: ColrConfig,
+    mood?: string,
+  ): Promise<Uint8Array | null> {
     if (!fontData.value) return null
     const wasm = await loadWasm()
     const request = JSON.stringify({
