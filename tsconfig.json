@@ -8,10 +8,9 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "jsx": "preserve",
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"],
-      "#shared/*": ["shared/*"]
+      "@/*": ["./src/*"],
+      "#shared/*": ["./shared/*"]
     },
     "types": ["vite/client"],
     "noEmit": true
