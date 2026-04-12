@@ -1,8 +1,10 @@
 # fontplay
-
 Upload a font, pick a mood, download the result.
 
 fontplay applies AI-generated geometric transforms and color effects to every glyph in a font — entirely in the browser. A Rust/WASM module rewrites the outlines and builds a new TTF file client-side. The styled font is injected as a `@font-face` and can be downloaded with the mood baked into the font name.
+
+### Demo
+**[giovanni-fontplay.netlify.app](https://giovanni-fontplay.netlify.app/)**
 
 ## How it works
 
