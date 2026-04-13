@@ -35,7 +35,10 @@ async function askNetlify(property: string): Promise<MoodResult> {
     body: JSON.stringify({ property }),
   })
 
-  if (!response.ok) throw new Error(`API error: ${response.status} ${response.statusText}`)
+  if (!response.ok) {
+    const data = await response.json().catch(() => null)
+    throw new Error(data?.error ?? `API error: ${response.status} ${response.statusText}`)
+  }
 
   const data = await response.json()
   if (data.error) throw new Error(data.error)
