@@ -2,6 +2,7 @@
   "editor.formatOnSave": true,
   "editor.defaultFormatter": "biomejs.biome",
   "[vue]": {
-    "editor.defaultFormatter": "biomejs.biome"
-  }
+    "editor.defaultFormatter": "vue.volar"
+  },
+  "biome.lspBin": "${workspaceFolder}/node_modules/@biomejs/cli-darwin-arm64/biome"
 }

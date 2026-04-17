@@ -2,7 +2,7 @@
   "$schema": "https://biomejs.dev/schemas/2.4.10/schema.json",
   "assist": { "actions": { "source": { "organizeImports": "on" } } },
   "files": {
-    "includes": ["**", "!rust/target", "!node_modules", "!dist", "!src/wasm"]
+    "includes": ["**", "!rust/target", "!node_modules", "!dist", "!src/wasm", "!**/*.vue"]
   },
   "formatter": {
     "enabled": true,
@@ -14,19 +14,6 @@
     "enabled": true,
     "rules": { "recommended": true }
   },
-  "overrides": [
-    {
-      "includes": ["**/*.vue"],
-      "linter": {
-        "rules": {
-          "correctness": {
-            "noUnusedVariables": "off",
-            "noUnusedImports": "off"
-          }
-        }
-      }
-    }
-  ],
   "javascript": {
     "formatter": {
       "quoteStyle": "single",
