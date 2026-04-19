@@ -90,6 +90,12 @@ struct StyleFontRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct RecombineRequest {
+    char_paths: HashMap<String, String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct BlendCanvasRequest {
     blend_factor: f32,
     char_codes: Vec<u32>,
@@ -1518,4 +1524,231 @@ fn build_palette(colr: &ColrInput) -> (Vec<ColorRecord>, u16, u16, u16, u16, u16
     let grad2_idx = push(&mut records, g2r, g2g, g2b, 255);
 
     (records, fill_idx, grad0_idx, grad1_idx, block_idx, shadow_idx, white_idx, outline_idx, grad2_idx)
+}
+
+// ─── SVG path parser ─────────────────────────────────────────────────────────
+
+fn take_f64(tokens: &[String], i: &mut usize) -> Option<f64> {
+    tokens.get(*i).and_then(|s| s.parse().ok()).map(|v| { *i += 1; v })
+}
+
+/// Parse an SVG path string (viewBox 0 0 1000 1000, y-down) into a BezPath in font space.
+fn parse_svg_path(d: &str, upem: f64, ascender: f64, descender: f64) -> BezPath {
+    let sx = upem / 1000.0;
+    let em = (ascender - descender).max(1.0);
+    let to_font = |x: f64, y: f64| Point::new(x * sx, ascender - y / 1000.0 * em);
+
+    // Tokenize: command letters and numbers (handle '-' as number start)
+    let mut tokens: Vec<String> = Vec::new();
+    let mut buf = String::new();
+    for ch in d.chars() {
+        if "MmLlCcQqZzHhVvSs".contains(ch) {
+            if !buf.is_empty() { tokens.push(buf.clone()); buf.clear(); }
+            tokens.push(ch.to_string());
+        } else if ch == ' ' || ch == ',' || ch == '\t' || ch == '\n' || ch == '\r' {
+            if !buf.is_empty() { tokens.push(buf.clone()); buf.clear(); }
+        } else if ch == '-' && !buf.is_empty() && buf != "-" {
+            tokens.push(buf.clone()); buf.clear();
+            buf.push(ch);
+        } else {
+            buf.push(ch);
+        }
+    }
+    if !buf.is_empty() { tokens.push(buf); }
+
+    let mut path = BezPath::new();
+    let mut cx = 0.0f64;
+    let mut cy = 0.0f64;
+    let mut mx = 0.0f64;
+    let mut my = 0.0f64;
+    let mut cmd = 'M';
+    let mut i = 0;
+
+    while i < tokens.len() {
+        let tok = &tokens[i];
+        if tok.len() == 1 {
+            if let Some(c) = tok.chars().next() {
+                if c.is_ascii_alphabetic() {
+                    i += 1;
+                    if c == 'Z' || c == 'z' {
+                        path.close_path();
+                        cx = mx; cy = my;
+                    } else {
+                        cmd = c;
+                    }
+                    continue;
+                }
+            }
+        }
+        let prev = i;
+        match cmd {
+            'M' => { let x = take_f64(&tokens, &mut i); let y = take_f64(&tokens, &mut i);
+                if let (Some(x), Some(y)) = (x, y) { cx=x; cy=y; mx=cx; my=cy; path.move_to(to_font(cx,cy)); cmd='L'; } }
+            'm' => { let x = take_f64(&tokens, &mut i); let y = take_f64(&tokens, &mut i);
+                if let (Some(dx), Some(dy)) = (x, y) { cx+=dx; cy+=dy; mx=cx; my=cy; path.move_to(to_font(cx,cy)); cmd='l'; } }
+            'L' => { let x = take_f64(&tokens, &mut i); let y = take_f64(&tokens, &mut i);
+                if let (Some(x), Some(y)) = (x, y) { cx=x; cy=y; path.line_to(to_font(cx,cy)); } }
+            'l' => { let x = take_f64(&tokens, &mut i); let y = take_f64(&tokens, &mut i);
+                if let (Some(dx), Some(dy)) = (x, y) { cx+=dx; cy+=dy; path.line_to(to_font(cx,cy)); } }
+            'H' => { if let Some(x) = take_f64(&tokens, &mut i) { cx=x; path.line_to(to_font(cx,cy)); } }
+            'h' => { if let Some(dx) = take_f64(&tokens, &mut i) { cx+=dx; path.line_to(to_font(cx,cy)); } }
+            'V' => { if let Some(y) = take_f64(&tokens, &mut i) { cy=y; path.line_to(to_font(cx,cy)); } }
+            'v' => { if let Some(dy) = take_f64(&tokens, &mut i) { cy+=dy; path.line_to(to_font(cx,cy)); } }
+            'C' => {
+                let x1=take_f64(&tokens,&mut i); let y1=take_f64(&tokens,&mut i);
+                let x2=take_f64(&tokens,&mut i); let y2=take_f64(&tokens,&mut i);
+                let x =take_f64(&tokens,&mut i); let y =take_f64(&tokens,&mut i);
+                if let (Some(x1),Some(y1),Some(x2),Some(y2),Some(x),Some(y)) = (x1,y1,x2,y2,x,y) {
+                    path.curve_to(to_font(x1,y1),to_font(x2,y2),to_font(x,y)); cx=x; cy=y;
+                }
+            }
+            'c' => {
+                let dx1=take_f64(&tokens,&mut i); let dy1=take_f64(&tokens,&mut i);
+                let dx2=take_f64(&tokens,&mut i); let dy2=take_f64(&tokens,&mut i);
+                let dx =take_f64(&tokens,&mut i); let dy =take_f64(&tokens,&mut i);
+                if let (Some(dx1),Some(dy1),Some(dx2),Some(dy2),Some(dx),Some(dy)) = (dx1,dy1,dx2,dy2,dx,dy) {
+                    path.curve_to(to_font(cx+dx1,cy+dy1),to_font(cx+dx2,cy+dy2),to_font(cx+dx,cy+dy));
+                    cx+=dx; cy+=dy;
+                }
+            }
+            'Q' => {
+                let x1=take_f64(&tokens,&mut i); let y1=take_f64(&tokens,&mut i);
+                let x =take_f64(&tokens,&mut i); let y =take_f64(&tokens,&mut i);
+                if let (Some(x1),Some(y1),Some(x),Some(y)) = (x1,y1,x,y) {
+                    path.quad_to(to_font(x1,y1),to_font(x,y)); cx=x; cy=y;
+                }
+            }
+            'q' => {
+                let dx1=take_f64(&tokens,&mut i); let dy1=take_f64(&tokens,&mut i);
+                let dx =take_f64(&tokens,&mut i); let dy =take_f64(&tokens,&mut i);
+                if let (Some(dx1),Some(dy1),Some(dx),Some(dy)) = (dx1,dy1,dx,dy) {
+                    path.quad_to(to_font(cx+dx1,cy+dy1),to_font(cx+dx,cy+dy)); cx+=dx; cy+=dy;
+                }
+            }
+            _ => { i += 1; continue; }
+        }
+        if i == prev { i += 1; }
+    }
+    path
+}
+
+// ─── Recombine ───────────────────────────────────────────────────────────────
+
+#[wasm_bindgen]
+pub fn recombine_fonts_with_paths(font1_data: &[u8], request_json: &str) -> Result<Vec<u8>, JsValue> {
+    let sfnt = to_sfnt(font1_data).map_err(|e| JsValue::from_str(&e))?;
+    let req: RecombineRequest = serde_json::from_str(request_json)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    recombine_internal(&sfnt, req).map_err(|e| JsValue::from_str(&e))
+}
+
+fn recombine_internal(font_data: &[u8], req: RecombineRequest) -> Result<Vec<u8>, String> {
+    let font = FontRef::new(font_data).map_err(|e| e.to_string())?;
+    let head = font.head().map_err(|e| e.to_string())?;
+    let hhea = font.hhea().map_err(|e| e.to_string())?;
+    let upem = head.units_per_em() as f64;
+    let ascender = hhea.ascender().to_i16() as f64;
+    let descender = hhea.descender().to_i16() as f64;
+    let glyph_count = font.maxp().map_err(|e| e.to_string())?.num_glyphs();
+
+    let charmap = font.charmap();
+    let metrics = font.glyph_metrics(Size::new(upem as f32), LocationRef::default());
+    let outlines = font.outline_glyphs();
+
+    let mut gid_to_path: HashMap<u32, String> = HashMap::new();
+    for (char_str, svg_path) in &req.char_paths {
+        if let Some(ch) = char_str.chars().next() {
+            if let Some(gid) = charmap.map(ch) {
+                gid_to_path.insert(gid.to_u32(), svg_path.clone());
+            }
+        }
+    }
+
+    let mut glyf_builder = GlyfLocaBuilder::new();
+    let mut h_metrics: Vec<LongMetric> = Vec::with_capacity(glyph_count as usize);
+
+    for gid_u16 in 0..glyph_count {
+        let gid = skrifa::GlyphId::new(gid_u16 as u32);
+        let advance = metrics.advance_width(gid).unwrap_or(upem as f32 * 0.5).round() as u16;
+
+        let svg_glyph = gid_to_path.get(&(gid_u16 as u32)).and_then(|svg_path| {
+            let bez = parse_svg_path(svg_path, upem, ascender, descender);
+            let has_drawing = bez.elements().iter().any(|el| matches!(
+                el, PathEl::LineTo(_) | PathEl::QuadTo(_, _) | PathEl::CurveTo(_, _, _)
+            ));
+            if !has_drawing { return None; }
+            let quad = cubics_to_quads(&bez);
+            SimpleGlyph::from_bezpath(&quad).ok().map(WriteGlyph::from)
+        });
+
+        let mut pen = CollectPen::new();
+        let ds = DrawSettings::unhinted(Size::new(upem as f32), LocationRef::default());
+        let font1_glyph = outlines.get(gid).and_then(|g| g.draw(ds, &mut pen).ok()).and_then(|_| {
+            if pen.path.is_empty() { return None; }
+            let quad = cubics_to_quads(&pen.path);
+            SimpleGlyph::from_bezpath(&quad).ok().map(WriteGlyph::from)
+        });
+
+        let g = svg_glyph.or(font1_glyph).unwrap_or(WriteGlyph::Empty);
+        let lsb = match &g { WriteGlyph::Simple(sg) => sg.bbox.x_min, _ => 0 };
+        glyf_builder.add_glyph(&g).map_err(|e| e.to_string())?;
+        h_metrics.push(LongMetric { advance, side_bearing: lsb });
+    }
+
+    let (new_glyf, new_loca, loca_format) = glyf_builder.build();
+    let new_glyf_bytes = dump_table(&new_glyf).map_err(|e| e.to_string())?;
+    let new_loca_bytes = dump_table(&new_loca).map_err(|e| e.to_string())?;
+    let hmtx = Hmtx::new(h_metrics, vec![]);
+
+    let mut head_bytes = font.table_data(ReadTag::new(b"head")).ok_or("no head")?.as_bytes().to_vec();
+    let loca_fmt_val: u16 = match loca_format {
+        write_fonts::tables::loca::LocaFormat::Long => 1,
+        write_fonts::tables::loca::LocaFormat::Short => 0,
+    };
+    patch_u16(&mut head_bytes, 50, loca_fmt_val);
+    patch_u16(&mut head_bytes, 8, 0);
+    patch_u16(&mut head_bytes, 10, 0);
+
+    let mut hhea_bytes = font.table_data(ReadTag::new(b"hhea")).ok_or("no hhea")?.as_bytes().to_vec();
+    patch_u16(&mut hhea_bytes, 34, glyph_count);
+
+    let empty_colr = ColrInput::default();
+    let (colr, cpal) = build_colr_cpal(
+        glyph_count, &empty_colr,
+        head.units_per_em(), hhea.ascender().to_i16(), hhea.descender().to_i16(),
+    );
+    let maxp = Maxp {
+        num_glyphs: glyph_count,
+        max_points: Some(0), max_contours: Some(0),
+        max_composite_points: Some(0), max_composite_contours: Some(0),
+        max_zones: Some(2), max_twilight_points: Some(0), max_storage: Some(0),
+        max_function_defs: Some(0), max_instruction_defs: Some(0),
+        max_stack_elements: Some(0), max_size_of_instructions: Some(0),
+        max_component_elements: Some(0), max_component_depth: Some(0),
+    };
+    let name_bytes = font.table_data(ReadTag::new(b"name"))
+        .map(|d| patch_name_table(d.as_bytes(), "Recombine"))
+        .unwrap_or_default();
+
+    let skip: &[[u8; 4]] = &[
+        *b"glyf", *b"loca", *b"hmtx", *b"maxp", *b"head", *b"hhea",
+        *b"name", *b"COLR", *b"CPAL",
+        *b"CFF ", *b"CFF2", *b"HVAR", *b"VVAR", *b"MVAR", *b"STAT", *b"fvar", *b"gvar",
+    ];
+    let mut builder = FontBuilder::new();
+    copy_tables_except(&mut builder, font_data, &font, skip);
+    builder.add_raw(Tag::new(b"name"), name_bytes);
+    builder.add_raw(Tag::new(b"glyf"), new_glyf_bytes);
+    builder.add_raw(Tag::new(b"loca"), new_loca_bytes);
+    builder.add_raw(Tag::new(b"head"), head_bytes);
+    builder.add_raw(Tag::new(b"hhea"), hhea_bytes);
+
+    let font_bytes = builder
+        .add_table(&maxp).map_err(|e| e.to_string())?
+        .add_table(&hmtx).map_err(|e| e.to_string())?
+        .add_table(&cpal).map_err(|e| e.to_string())?
+        .add_table(&colr).map_err(|e| e.to_string())?
+        .build();
+
+    Ok(font_bytes)
 }

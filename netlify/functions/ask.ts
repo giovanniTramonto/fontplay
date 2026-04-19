@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { getStore } from '@netlify/blobs'
 import { MAX_PROMPT_LENGTH, MAX_SESSION_REQUESTS } from '#shared/config'
 import { SYSTEM_PROMPT } from '#shared/prompts/systemPrompt'
-import { extractResult } from '#shared/utils/extractSvg'
+import { extractResult } from '#shared/utils/parseLLMResult'
 
 const client = new Anthropic({
   defaultHeaders: { 'anthropic-beta': 'prompt-caching-2024-07-31' },

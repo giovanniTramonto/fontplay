@@ -4,6 +4,7 @@ import { DEFAULT_TEXT } from '#shared/constants'
 import BlendButtons from '@/components/BlendButtons.vue'
 import ClearButton from '@/components/ClearButton.vue'
 import FontUpload from '@/components/FontUpload.vue'
+import RecombineButtons from '@/components/RecombineButtons.vue'
 import GlyphDisplay from '@/components/GlyphDisplay.vue'
 import LetterInput from '@/components/LetterInput.vue'
 import MoodButtons from '@/components/MoodButtons.vue'
@@ -18,6 +19,7 @@ const {
   loadFont,
   styleFont,
   blendFontsSdfCanvas,
+  recombineFonts,
   resetFont,
 } = useFontWasm()
 
@@ -37,7 +39,7 @@ const fontName = ref<string | null>(null)
 // Styled font bytes — null means use original font
 const styledFontBytes = ref<Uint8Array | null>(null)
 const isColrEnabled = ref(true)
-const activeTab = ref<'mood' | 'blend'>('mood')
+const activeTab = ref<'mood' | 'blend' | 'recombine'>('mood')
 
 const blendFontName = ref<string | null>(null)
 const blendFactor = ref(0.5)
@@ -45,22 +47,28 @@ const blendStyledFontBytes = ref<Uint8Array | null>(null)
 const blendStyledFontFamily = ref<string | null>(null)
 const blendBaseFontFamily = ref<string | null>(null)
 
+const recombineChar = computed(() => [...text.value.trim()][0] ?? 'A')
+const recombineStyledFontBytes = ref<Uint8Array | null>(null)
+const recombineStyledFontFamily = ref<string | null>(null)
+
 // Unique CSS font-family name, incremented on each font upload to avoid cache issues
 let fontCounter = 0
 const baseFontFamily = ref<string | null>(null)
 const styledFontFamily = ref<string | null>(null)
 
-// The font-family shown in GlyphDisplay: mood-styled → blend-styled → original
-const displayFontFamily = computed(
-  () => styledFontFamily.value ?? blendStyledFontFamily.value ?? baseFontFamily.value,
+// The generated result font-family (null when no result exists yet)
+const resultFontFamily = computed(
+  () => styledFontFamily.value ?? blendStyledFontFamily.value ?? recombineStyledFontFamily.value ?? null,
 )
 
-const activeDownloadBytes = computed(() => styledFontBytes.value ?? blendStyledFontBytes.value)
+const activeDownloadBytes = computed(() => styledFontBytes.value ?? blendStyledFontBytes.value ?? recombineStyledFontBytes.value)
 const activeDownloadName = computed(() => {
   if (styledFontBytes.value)
     return `${fontName.value ?? 'fontplay'}-${activeProperty.value ?? 'styled'}`
   if (blendStyledFontBytes.value)
     return `${fontName.value ?? 'font1'}-x-${blendFontName.value ?? 'font2'}-blend`
+  if (recombineStyledFontBytes.value)
+    return `${fontName.value ?? 'font1'}-x-${blendFontName.value ?? 'font2'}-recombine-${recombineChar.value}`
   return null
 })
 
@@ -109,6 +117,27 @@ function onRemoveFont() {
 
 function onWrite(letters: string) {
   text.value = letters
+}
+
+async function onRecombine() {
+  if (!baseFontFamily.value || !blendBaseFontFamily.value) return
+  isAiLoading.value = true
+  aiError.value = null
+  const char = recombineChar.value
+  try {
+    const bytes = await recombineFonts(char, baseFontFamily.value, blendBaseFontFamily.value)
+    if (bytes) {
+      recombineStyledFontBytes.value = bytes
+      fontCounter++
+      const family = `fontplay-recombine-${fontCounter}`
+      recombineStyledFontFamily.value = family
+      injectFontFace(family, bytes)
+    }
+  } catch (e) {
+    aiError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    isAiLoading.value = false
+  }
 }
 
 function onRemoveBlendFont() {
@@ -236,18 +265,12 @@ function downloadFont() {
       <p v-else-if="fontError" role="alert" class="error">{{ fontError }}</p>
     </section>
 
-    <section v-if="fontInfo && !isFontLoading" aria-label="Letter input">
-      <LetterInput @write="onWrite" />
+    <section v-if="fontInfo && !isFontLoading" aria-label="Glyph display">
+      <GlyphDisplay :text="text" :fontFamily="baseFontFamily" :resultFontFamily="resultFontFamily" />
     </section>
 
-    <section v-if="fontInfo && !isFontLoading" aria-label="Glyph display">
-      <GlyphDisplay :text="text" :fontFamily="displayFontFamily" />
-      <div class="display-options">
-        <label class="colrv1-toggle text-size-m">
-          <input v-model="isColrEnabled" type="checkbox" />
-          Enable COLRv1
-        </label>
-      </div>
+    <section v-if="fontInfo && !isFontLoading" aria-label="Letter input">
+      <LetterInput @write="onWrite" />
     </section>
 
     <section v-if="fontInfo && !isFontLoading" aria-label="Style">
@@ -256,15 +279,20 @@ function downloadFont() {
           @click="activeTab = 'mood'">Mood</button>
         <button role="tab" :aria-selected="activeTab === 'blend'" :class="['btn', { active: activeTab === 'blend' }]"
           @click="activeTab = 'blend'">Blend</button>
+        <button role="tab" :aria-selected="activeTab === 'recombine'" :class="['btn', { active: activeTab === 'recombine' }]"
+          @click="activeTab = 'recombine'">Recombine</button>
       </div>
       <div class="container">
         <MoodButtons v-if="activeTab === 'mood'" :isLoading="isAiLoading" :activeProperty="activeProperty"
-          @style="onStyle" />
+          v-model:isColrEnabled="isColrEnabled" @style="onStyle" />
         <BlendButtons v-else-if="activeTab === 'blend'" :isLoading="isAiLoading" :blendFontName="blendFontName"
           :blendFontInfo="blendFontInfo" v-model:blendFactor="blendFactor" @upload="onBlendUpload" @blend="onBlend"
           @removeBlendFont="onRemoveBlendFont" />
+        <RecombineButtons v-else-if="activeTab === 'recombine'" :isLoading="isAiLoading"
+          :blendFontName="blendFontName" :blendFontInfo="blendFontInfo"
+          @upload="onBlendUpload" @recombine="onRecombine" @removeBlendFont="onRemoveBlendFont" />
       </div>
-      <p v-if="isAiLoading" aria-live="polite" class="loading">{{ activeTab === 'blend' ? 'Blending…' : 'Generating…' }}</p>
+      <p v-if="isAiLoading" aria-live="polite" class="loading">{{ activeTab === 'blend' ? 'Blending…' : activeTab === 'recombine' ? 'Recombining…' : 'Generating…' }}</p>
       <p v-else-if="aiError" role="alert" class="error">{{ aiError }}</p>
     </section>
 
@@ -288,23 +316,10 @@ function downloadFont() {
   margin: 0;
 }
 
-.display-options {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 0.5rem;
-}
-
 .tabs {
   display: flex;
   gap: 0.5rem;
   margin-bottom: 0.75rem;
 }
 
-.colrv1-toggle {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  cursor: pointer;
-  user-select: none;
-}
 </style>

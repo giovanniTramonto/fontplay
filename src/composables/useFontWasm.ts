@@ -1,5 +1,6 @@
 import { ref, shallowRef } from 'vue'
 import type { ColrConfig, Transform } from '#shared/types'
+import { askRecombineLLM } from '@/composables/useLLM'
 
 const CANVAS_SIZE = 512
 const BLEND_CHARS =
@@ -161,11 +162,63 @@ export function useFontWasm() {
     return bytes
   }
 
+  async function glyphToBase64Png(
+    fontFamily: string,
+    char: string,
+    upem: number,
+    ascender: number,
+    descender: number,
+  ): Promise<string> {
+    const size = CANVAS_SIZE
+    const canvas = new OffscreenCanvas(size, size)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return ''
+    ctx.fillStyle = 'white'
+    ctx.fillRect(0, 0, size, size)
+    const em = ascender - descender
+    const scale = (size * 0.8) / em
+    const cssFontSizePx = scale * upem
+    const baselinePx = size * 0.5 + (ascender + descender) * 0.5 * scale
+    ctx.fillStyle = 'black'
+    ctx.font = `${cssFontSizePx}px '${fontFamily}'`
+    ctx.textBaseline = 'alphabetic'
+    ctx.textAlign = 'left'
+    const textWidth = ctx.measureText(char).width
+    const leftPadPx = Math.max(0, (size - textWidth) / 2)
+    ctx.fillText(char, leftPadPx, baselinePx)
+    const blob = await canvas.convertToBlob({ type: 'image/png' })
+    const buffer = await blob.arrayBuffer()
+    const bytes = new Uint8Array(buffer)
+    let binary = ''
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+    return btoa(binary)
+  }
+
+  async function recombineFonts(
+    char: string,
+    font1Family: string,
+    font2Family: string,
+  ): Promise<Uint8Array | null> {
+    if (!fontData.value || !fontInfo.value) return null
+    const wasm = await loadWasm()
+    const { unitsPerEm: upem, ascender, descender } = fontInfo.value
+
+    const [image1, image2] = await Promise.all([
+      glyphToBase64Png(font1Family, char, upem, ascender, descender),
+      glyphToBase64Png(font2Family, char, upem, ascender, descender),
+    ])
+
+    const { path } = await askRecombineLLM(char, image1, image2)
+const request = JSON.stringify({ charPaths: { [char]: path } })
+    const bytes: Uint8Array = wasm.recombine_fonts_with_paths(fontData.value, request)
+    return bytes
+  }
+
   function resetFont() {
     fontData.value = null
     fontInfo.value = null
     error.value = null
   }
 
-  return { fontData, fontInfo, isLoading, error, loadFont, styleFont, blendFontsSdfCanvas, resetFont }
+  return { fontData, fontInfo, isLoading, error, loadFont, styleFont, blendFontsSdfCanvas, recombineFonts, resetFont }
 }

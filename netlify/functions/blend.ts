@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { getStore } from '@netlify/blobs'
 import { MAX_PROMPT_LENGTH, MAX_SESSION_REQUESTS } from '#shared/config'
 import { makeBlendPrompt } from '#shared/prompts/blendPrompt'
-import { extractBlendResult } from '#shared/utils/extractSvg'
+import { extractBlendResult } from '#shared/utils/parseLLMResult'
 
 
 const client = new Anthropic()
