@@ -66,12 +66,12 @@ function parseColr(raw: unknown): ColrConfig {
   return {
     effects: new Set(filtered),
     fillColor: typeof e.fillColor === 'string' ? e.fillColor : undefined,
-    gradientColors: isColorPair(e.gradientColors) ? e.gradientColors : undefined,
+    gradientColors: isGradientColors(e.gradientColors) ? e.gradientColors : undefined,
     outlineColor: typeof e.outlineColor === 'string' ? e.outlineColor : undefined,
     blockColor: typeof e.blockColor === 'string' ? e.blockColor : undefined,
   }
 }
 
-function isColorPair(v: unknown): v is [string, string] {
-  return Array.isArray(v) && v.length === 2 && typeof v[0] === 'string' && typeof v[1] === 'string'
+function isGradientColors(v: unknown): v is [string, string] | [string, string, string] {
+  return Array.isArray(v) && (v.length === 2 || v.length === 3) && v.every((c) => typeof c === 'string')
 }

@@ -104,6 +104,10 @@ enum Transform {
     Shear { angle: f32 },
     Jitter { amplitude: f32 },
     Wave { amplitude: f32, frequency: f32 },
+    WaveY { amplitude: f32, frequency: f32 },
+    Rotate { angle: f32 },
+    Perspective { depth: f32 },
+    Arch { amplitude: f32 },
 }
 
 #[derive(Deserialize, Default)]
@@ -113,6 +117,7 @@ struct ColrInput {
     effects: Vec<String>,
     fill_color: Option<String>,
     gradient_colors: Option<Vec<String>>,
+    outline_color: Option<String>,
     block_color: Option<String>,
 }
 
@@ -132,7 +137,13 @@ impl Lcg {
 
 // ─── Point transform ─────────────────────────────────────────────────────────
 
-fn transform_point(x: f64, y: f64, transforms: &[Transform], rand: &mut Lcg) -> (f64, f64) {
+fn transform_point(
+    x: f64, y: f64,
+    transforms: &[Transform],
+    rand: &mut Lcg,
+    cx: f64, cy: f64,
+    upem: f64,
+) -> (f64, f64) {
     let mut nx = x;
     let mut ny = y;
     for t in transforms {
@@ -149,6 +160,26 @@ fn transform_point(x: f64, y: f64, transforms: &[Transform], rand: &mut Lcg) -> 
             Transform::Wave { amplitude, frequency } => {
                 nx += (ny * *frequency as f64).sin() * *amplitude as f64;
             }
+            Transform::WaveY { amplitude, frequency } => {
+                ny += (nx * *frequency as f64).sin() * *amplitude as f64;
+            }
+            Transform::Rotate { angle } => {
+                let theta = *angle as f64 * std::f64::consts::PI / 180.0;
+                let dx = nx - cx;
+                let dy = ny - cy;
+                nx = cx + dx * theta.cos() - dy * theta.sin();
+                ny = cy + dx * theta.sin() + dy * theta.cos();
+            }
+            Transform::Perspective { depth } => {
+                // trapezoid: x scales with y-height; y=0 baseline unchanged, y=upem fully scaled
+                let t = ny / upem.max(1.0);
+                nx *= 1.0 + *depth as f64 * t;
+            }
+            Transform::Arch { amplitude } => {
+                // parabolic vertical bow: peaks at x=cx, falls off toward edges
+                let dx = (nx - cx) / (upem * 0.5).max(1.0);
+                ny += *amplitude as f64 * (1.0 - dx * dx);
+            }
         }
     }
     (nx, ny)
@@ -156,7 +187,7 @@ fn transform_point(x: f64, y: f64, transforms: &[Transform], rand: &mut Lcg) -> 
 
 // ─── Glyph collection pen ────────────────────────────────────────────────────
 
-use kurbo::{BezPath, CubicBez, PathEl, Point};
+use kurbo::{BezPath, CubicBez, PathEl, Point, Shape};
 
 struct CollectPen {
     path: BezPath,
@@ -200,31 +231,34 @@ impl OutlinePen for CollectPen {
 
 // ─── Path helpers ─────────────────────────────────────────────────────────────
 
-fn apply_transforms_to_path(path: &BezPath, transforms: &[Transform], seed: u32) -> BezPath {
+fn apply_transforms_to_path(path: &BezPath, transforms: &[Transform], seed: u32, upem: f64) -> BezPath {
     if transforms.is_empty() {
         return path.clone();
     }
+    let bbox = path.bounding_box();
+    let cx = (bbox.x0 + bbox.x1) * 0.5;
+    let cy = (bbox.y0 + bbox.y1) * 0.5;
     let mut rand = Lcg::new(seed);
     let mut out = BezPath::new();
     for el in path.iter() {
         match el {
             PathEl::MoveTo(p) => {
-                let (nx, ny) = transform_point(p.x, p.y, transforms, &mut rand);
+                let (nx, ny) = transform_point(p.x, p.y, transforms, &mut rand, cx, cy, upem);
                 out.move_to(Point::new(nx, ny));
             }
             PathEl::LineTo(p) => {
-                let (nx, ny) = transform_point(p.x, p.y, transforms, &mut rand);
+                let (nx, ny) = transform_point(p.x, p.y, transforms, &mut rand, cx, cy, upem);
                 out.line_to(Point::new(nx, ny));
             }
             PathEl::QuadTo(p1, p2) => {
-                let (x1, y1) = transform_point(p1.x, p1.y, transforms, &mut rand);
-                let (x2, y2) = transform_point(p2.x, p2.y, transforms, &mut rand);
+                let (x1, y1) = transform_point(p1.x, p1.y, transforms, &mut rand, cx, cy, upem);
+                let (x2, y2) = transform_point(p2.x, p2.y, transforms, &mut rand, cx, cy, upem);
                 out.quad_to(Point::new(x1, y1), Point::new(x2, y2));
             }
             PathEl::CurveTo(p1, p2, p3) => {
-                let (x1, y1) = transform_point(p1.x, p1.y, transforms, &mut rand);
-                let (x2, y2) = transform_point(p2.x, p2.y, transforms, &mut rand);
-                let (x3, y3) = transform_point(p3.x, p3.y, transforms, &mut rand);
+                let (x1, y1) = transform_point(p1.x, p1.y, transforms, &mut rand, cx, cy, upem);
+                let (x2, y2) = transform_point(p2.x, p2.y, transforms, &mut rand, cx, cy, upem);
+                let (x3, y3) = transform_point(p3.x, p3.y, transforms, &mut rand, cx, cy, upem);
                 out.curve_to(Point::new(x1, y1), Point::new(x2, y2), Point::new(x3, y3));
             }
             PathEl::ClosePath => {
@@ -590,7 +624,7 @@ fn style_font_internal(font_data: &[u8], req: StyleFontRequest) -> Result<Vec<u8
         let write_glyph = if !has_outline || pen.path.is_empty() {
             WriteGlyph::Empty
         } else {
-            let transformed = apply_transforms_to_path(&pen.path, &req.transforms, gid_u16 as u32);
+            let transformed = apply_transforms_to_path(&pen.path, &req.transforms, gid_u16 as u32, upem as f64);
             let quad = cubics_to_quads(&transformed);
             SimpleGlyph::from_bezpath(&quad)
                 .map(WriteGlyph::from)
@@ -705,7 +739,7 @@ fn build_colr_cpal(
     ascender: i16,
     descender: i16,
 ) -> (Colr, Cpal) {
-    let (palette, fill_idx, grad0_idx, grad1_idx, block_idx, shadow_idx) =
+    let (palette, fill_idx, grad0_idx, grad1_idx, block_idx, shadow_idx, white_idx, outline_idx, grad2_idx) =
         build_palette(colr_input);
 
     let has = |e: &str| colr_input.effects.iter().any(|s| s == e);
@@ -713,6 +747,10 @@ fn build_colr_cpal(
     let has_3d = has("3d-blocks");
     let has_fill = has("fill");
     let has_gradient = has("gradient");
+    let has_highlight = has("highlight");
+    let has_outline = has("outline");
+    let has_double_outline = has("double-outline");
+    let has_3rd_gradient = colr_input.gradient_colors.as_ref().map(|v| v.len() >= 3).unwrap_or(false);
 
     let mut layer_list: Vec<Paint> = vec![];
     let mut base_glyph_paints: Vec<BaseGlyphPaint> = vec![];
@@ -722,6 +760,38 @@ fn build_colr_cpal(
     for gid_u16 in 0..glyph_count {
         let gid = GlyphId16::new(gid_u16);
         let first_layer = layer_list.len() as u32;
+
+        // Outline rings: 16 evenly-spaced directions per ring for smooth coverage
+        if has_double_outline || has_outline {
+            let make_ring = |d: f32| -> Vec<(i16, i16)> {
+                (0..16).map(|i| {
+                    let a = 2.0 * std::f32::consts::PI * (i as f32) / 16.0;
+                    ((d * a.cos()).round() as i16, (d * a.sin()).round() as i16)
+                }).collect()
+            };
+            let d_inner = (upem as f32 / 18.0).max(20.0);
+            if has_double_outline {
+                let d_outer = (upem as f32 / 8.0).max(40.0);
+                for (dx, dy) in make_ring(d_outer) {
+                    layer_list.push(Paint::Translate(PaintTranslate::new(
+                        Paint::Glyph(PaintGlyph::new(
+                            Paint::Solid(PaintSolid::new(outline_idx, F2Dot14::from_f32(0.5))),
+                            gid,
+                        )),
+                        FWord::new(dx), FWord::new(dy),
+                    )));
+                }
+            }
+            for (dx, dy) in make_ring(d_inner) {
+                layer_list.push(Paint::Translate(PaintTranslate::new(
+                    Paint::Glyph(PaintGlyph::new(
+                        Paint::Solid(PaintSolid::new(outline_idx, F2Dot14::from_f32(1.0))),
+                        gid,
+                    )),
+                    FWord::new(dx), FWord::new(dy),
+                )));
+            }
+        }
 
         if has_shadow {
             layer_list.push(Paint::Translate(PaintTranslate::new(
@@ -749,14 +819,14 @@ fn build_colr_cpal(
         }
 
         let main_paint = if has_gradient {
-            let color_line = ColorLine::new(
-                Extend::Pad,
-                2,
-                vec![
-                    ColorStop::new(F2Dot14::from_f32(0.0), grad0_idx, F2Dot14::from_f32(1.0)),
-                    ColorStop::new(F2Dot14::from_f32(1.0), grad1_idx, F2Dot14::from_f32(1.0)),
-                ],
-            );
+            let mut stops = vec![
+                ColorStop::new(F2Dot14::from_f32(0.0), grad0_idx, F2Dot14::from_f32(1.0)),
+                ColorStop::new(F2Dot14::from_f32(1.0), grad1_idx, F2Dot14::from_f32(1.0)),
+            ];
+            if has_3rd_gradient {
+                stops.insert(1, ColorStop::new(F2Dot14::from_f32(0.5), grad2_idx, F2Dot14::from_f32(1.0)));
+            }
+            let color_line = ColorLine::new(Extend::Pad, stops.len() as u16, stops);
             Paint::Glyph(PaintGlyph::new(
                 Paint::LinearGradient(PaintLinearGradient::new(
                     color_line,
@@ -781,6 +851,30 @@ fn build_colr_cpal(
             ))
         };
         layer_list.push(main_paint);
+
+        if has_highlight {
+            let mid_y = (ascender as i32 + descender as i32) / 2;
+            let color_line = ColorLine::new(
+                Extend::Pad,
+                2,
+                vec![
+                    ColorStop::new(F2Dot14::from_f32(0.0), white_idx, F2Dot14::from_f32(0.55)),
+                    ColorStop::new(F2Dot14::from_f32(1.0), white_idx, F2Dot14::from_f32(0.0)),
+                ],
+            );
+            layer_list.push(Paint::Glyph(PaintGlyph::new(
+                Paint::LinearGradient(PaintLinearGradient::new(
+                    color_line,
+                    FWord::new(0),
+                    FWord::new(ascender),
+                    FWord::new(0),
+                    FWord::new(mid_y as i16),
+                    FWord::new(upem as i16),
+                    FWord::new(ascender),
+                )),
+                gid,
+            )));
+        }
 
         let num_layers = (layer_list.len() as u32 - first_layer) as u8;
         let root_paint = if num_layers == 1 {
@@ -1382,7 +1476,7 @@ fn blend_from_canvas_internal(
     Ok(font_bytes)
 }
 
-fn build_palette(colr: &ColrInput) -> (Vec<ColorRecord>, u16, u16, u16, u16, u16) {
+fn build_palette(colr: &ColrInput) -> (Vec<ColorRecord>, u16, u16, u16, u16, u16, u16, u16, u16) {
     let mut records: Vec<ColorRecord> = vec![];
 
     let parse_hex = |hex: &str| -> (u8, u8, u8) {
@@ -1415,6 +1509,13 @@ fn build_palette(colr: &ColrInput) -> (Vec<ColorRecord>, u16, u16, u16, u16, u16
     let block_idx = push(&mut records, br, bg, bb, 255);
 
     let shadow_idx = push(&mut records, 0, 0, 0, 255);
+    let white_idx = push(&mut records, 255, 255, 255, 255);
 
-    (records, fill_idx, grad0_idx, grad1_idx, block_idx, shadow_idx)
+    let (or_, og, ob) = colr.outline_color.as_deref().map(parse_hex).unwrap_or((0xff, 0xff, 0xff));
+    let outline_idx = push(&mut records, or_, og, ob, 255);
+
+    let (g2r, g2g, g2b) = colr.gradient_colors.as_ref().and_then(|v| v.get(2)).map(|s| parse_hex(s)).unwrap_or((g1r, g1g, g1b));
+    let grad2_idx = push(&mut records, g2r, g2g, g2b, 255);
+
+    (records, fill_idx, grad0_idx, grad1_idx, block_idx, shadow_idx, white_idx, outline_idx, grad2_idx)
 }

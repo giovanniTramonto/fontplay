@@ -8,7 +8,7 @@ const emit = defineEmits<{ style: [property: string | null] }>()
 
 const properties = [
   { id: 'modern', label: 'Modern' },
-  { id: 'futuristic', label: 'Futuristic' },
+  { id: 'cyber', label: 'Cyber' },
   { id: 'playful', label: 'Playful' },
   { id: 'edgy', label: 'Edgy' },
   { id: 'cool', label: 'Cool' },
