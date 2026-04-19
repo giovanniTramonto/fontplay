@@ -17,13 +17,9 @@ const properties = [
 
 <template>
   <div class="style-buttons">
-    <button
-      v-for="{ id, label } in properties"
-      :key="id"
-      :disabled="isLoading"
-      :class="['btn', { active: activeProperty === id }]"
-      @click="emit('style', activeProperty === id ? null : id)"
-    >
+    <button v-for="{ id, label } in properties" :key="id" :disabled="isLoading"
+      :class="['btn btn--secondary', { active: activeProperty === id }]"
+      @click="emit('style', activeProperty === id ? null : id)">
       {{ label }}
     </button>
   </div>
@@ -35,11 +31,4 @@ const properties = [
   gap: 0.5rem;
   flex-wrap: wrap;
 }
-
-.btn.active {
-  background: var(--color-active);
-  color: #fff;
-  border-color: var(--color-active);
-}
-
 </style>

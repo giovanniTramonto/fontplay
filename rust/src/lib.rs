@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use skrifa::{
     instance::LocationRef,
@@ -76,6 +77,7 @@ pub fn style_font(font_data: &[u8], request_json: &str) -> Result<Vec<u8>, JsVal
     style_font_internal(&sfnt, req).map_err(|e| JsValue::from_str(&e))
 }
 
+
 // ─── Request types ────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -84,6 +86,14 @@ struct StyleFontRequest {
     colr: ColrInput,
     #[serde(default)]
     mood: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BlendCanvasRequest {
+    blend_factor: f32,
+    char_codes: Vec<u32>,
+    bitmap_size: u32,
 }
 
 #[derive(Deserialize)]
@@ -537,6 +547,8 @@ fn patch_u16(data: &mut Vec<u8>, offset: usize, value: u16) {
     }
 }
 
+
+
 // ─── Main style_font implementation ──────────────────────────────────────────
 
 fn style_font_internal(font_data: &[u8], req: StyleFontRequest) -> Result<Vec<u8>, String> {
@@ -812,6 +824,562 @@ fn build_colr_cpal(
     let cpal = Cpal::new(n_colors, 1, n_colors, Some(palette), vec![0]);
 
     (colr, cpal)
+}
+
+
+/// 1-D Euclidean distance transform (Felzenszwalb-Huttenlocher).
+/// Input: squared initial distances (0.0 for seeds, large value for non-seeds).
+/// Returns squared distances to nearest seed.
+fn edt_1d(f: &[f32]) -> Vec<f32> {
+    let n = f.len();
+    if n == 0 { return vec![]; }
+    let mut d = vec![0.0f32; n];
+    let mut v = vec![0usize; n];
+    let mut z = vec![0.0f32; n + 1];
+    v[0] = 0;
+    z[0] = f32::NEG_INFINITY;
+    z[1] = f32::INFINITY;
+    let mut k = 0usize;
+
+    for q in 1..n {
+        loop {
+            let r = v[k] as f32;
+            let s = ((f[q] + (q * q) as f32) - (f[v[k]] + (v[k] * v[k]) as f32))
+                / (2.0 * q as f32 - 2.0 * r);
+            if s <= z[k] {
+                if k == 0 { v[0] = q; z[0] = f32::NEG_INFINITY; z[1] = f32::INFINITY; break; }
+                k -= 1;
+            } else {
+                k += 1;
+                v[k] = q;
+                z[k] = s;
+                z[k + 1] = f32::INFINITY;
+                break;
+            }
+        }
+    }
+    let mut k = 0usize;
+    for q in 0..n {
+        while z[k + 1] < q as f32 { k += 1; }
+        let diff = q as f32 - v[k] as f32;
+        d[q] = diff * diff + f[v[k]];
+    }
+    d
+}
+
+/// Separable 2-D Euclidean distance transform.
+/// Input: 0.0 for seed pixels, large value otherwise.
+/// Returns Euclidean distances (not squared).
+fn edt_2d(grid: &[f32], w: usize, h: usize) -> Vec<f32> {
+    let mut g = grid.to_vec();
+    for y in 0..h {
+        let row = g[y * w..(y + 1) * w].to_vec();
+        let d = edt_1d(&row);
+        g[y * w..(y + 1) * w].copy_from_slice(&d);
+    }
+    for x in 0..w {
+        let col: Vec<f32> = (0..h).map(|y| g[y * w + x]).collect();
+        let d = edt_1d(&col);
+        for y in 0..h { g[y * w + x] = d[y].sqrt(); }
+    }
+    g
+}
+
+/// Compute signed distance field: positive inside, negative outside.
+fn compute_sdf(bitmap: &[bool], w: usize, h: usize) -> Vec<f32> {
+    let inf = (w * w + h * h + 1) as f32;
+    let to_outside: Vec<f32> = bitmap.iter().map(|&b| if !b { 0.0 } else { inf }).collect();
+    let to_inside:  Vec<f32> = bitmap.iter().map(|&b| if  b { 0.0 } else { inf }).collect();
+    let dist_out = edt_2d(&to_outside, w, h);
+    let dist_in  = edt_2d(&to_inside,  w, h);
+    bitmap.iter().enumerate().map(|(i, &inside)| {
+        if inside { dist_out[i] } else { -dist_in[i] }
+    }).collect()
+}
+
+/// Directed-edge boundary tracing. Collects edges between inside/outside pixel pairs,
+/// then follows the directed chain to form closed contours. One contour per connected
+/// boundary component; no interior pixels are visited so contours are never fragmented.
+fn trace_contours(bitmap: &[bool], w: usize, h: usize) -> Vec<Vec<(f32, f32)>> {
+    use std::collections::{HashMap, HashSet};
+
+    let inside = |x: i32, y: i32| -> bool {
+        x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h
+            && bitmap[y as usize * w + x as usize]
+    };
+
+    // Build one directed edge per boundary transition.
+    // Corner coordinates: pixel (x,y) has corners at integer (x,y)..(x+1,y+1).
+    // Winding: inside region is to the left of each directed edge.
+    let mut next_edge: HashMap<(i32, i32), (i32, i32)> = HashMap::new();
+    for y in 0..=(h as i32) {
+        for x in 0..=(w as i32) {
+            let above = inside(x, y - 1);
+            let below = inside(x, y);
+            if above != below {
+                if below { next_edge.insert((x, y), (x + 1, y)); }
+                else     { next_edge.insert((x + 1, y), (x, y)); }
+            }
+            let left  = inside(x - 1, y);
+            let right = inside(x, y);
+            if left != right {
+                if right { next_edge.insert((x, y + 1), (x, y)); }
+                else     { next_edge.insert((x, y), (x, y + 1)); }
+            }
+        }
+    }
+
+    let mut visited: HashSet<(i32, i32)> = HashSet::new();
+    let mut contours = Vec::new();
+    let mut starts: Vec<(i32, i32)> = next_edge.keys().copied().collect();
+    starts.sort_unstable();
+
+    for start in starts {
+        if visited.contains(&start) { continue; }
+        let mut contour: Vec<(f32, f32)> = Vec::new();
+        let mut cur = start;
+        loop {
+            if visited.contains(&cur) { break; }
+            visited.insert(cur);
+            contour.push((cur.0 as f32, cur.1 as f32));
+            match next_edge.get(&cur) {
+                Some(&nxt) => cur = nxt,
+                None => break,
+            }
+        }
+        if contour.len() >= 3 { contours.push(contour); }
+    }
+    contours
+}
+
+/// Douglas-Peucker polyline simplification.
+// ── Bézier curve fitting (Schneider 1990) ────────────────────────────────────
+
+#[inline] fn v2add(a:(f64,f64),b:(f64,f64))->(f64,f64){(a.0+b.0,a.1+b.1)}
+#[inline] fn v2sub(a:(f64,f64),b:(f64,f64))->(f64,f64){(a.0-b.0,a.1-b.1)}
+#[inline] fn v2scale(v:(f64,f64),s:f64)->(f64,f64){(v.0*s,v.1*s)}
+#[inline] fn v2dot(a:(f64,f64),b:(f64,f64))->f64{a.0*b.0+a.1*b.1}
+#[inline] fn v2len(v:(f64,f64))->f64{(v.0*v.0+v.1*v.1).sqrt()}
+#[inline] fn v2dist(a:(f64,f64),b:(f64,f64))->f64{v2len(v2sub(a,b))}
+#[inline] fn v2norm(v:(f64,f64))->(f64,f64){
+    let l=v2len(v); if l<1e-10{(1.0,0.0)}else{(v.0/l,v.1/l)}
+}
+
+fn eval_bezier(p:&[(f64,f64);4],t:f64)->(f64,f64){
+    let mt=1.0-t;
+    v2add(v2add(v2scale(p[0],mt*mt*mt),v2scale(p[1],3.0*mt*mt*t)),
+          v2add(v2scale(p[2],3.0*mt*t*t),v2scale(p[3],t*t*t)))
+}
+
+fn chord_params(pts:&[(f64,f64)])->Vec<f64>{
+    let n=pts.len();
+    let mut u=vec![0.0f64;n];
+    for i in 1..n{u[i]=u[i-1]+v2dist(pts[i],pts[i-1]);}
+    let tot=u[n-1];
+    if tot>0.0{u.iter_mut().for_each(|v|*v/=tot);}
+    u
+}
+
+fn fit_one_bezier(pts:&[(f64,f64)],u:&[f64],t1:(f64,f64),t2:(f64,f64))->[(f64,f64);4]{
+    let n=pts.len();
+    let p0=pts[0]; let p3=pts[n-1];
+    let mut c=[[0.0f64;2];2];
+    let mut x=[0.0f64;2];
+    for i in 0..n{
+        let t=u[i]; let mt=1.0-t;
+        let b1=3.0*mt*mt*t; let b2=3.0*mt*t*t;
+        let a1=v2scale(t1,b1); let a2=v2scale(t2,b2);
+        c[0][0]+=v2dot(a1,a1); c[0][1]+=v2dot(a1,a2);
+        c[1][0]+=v2dot(a2,a1); c[1][1]+=v2dot(a2,a2);
+        let b0=mt*mt*mt; let b3=t*t*t;
+        let rhs=v2sub(pts[i],v2add(v2scale(p0,b0+b1),v2scale(p3,b2+b3)));
+        x[0]+=v2dot(a1,rhs); x[1]+=v2dot(a2,rhs);
+    }
+    let det=c[0][0]*c[1][1]-c[0][1]*c[1][0];
+    let (al1,al2)=if det.abs()<1e-10{
+        let d=v2dist(p0,p3)/3.0;(d,d)
+    }else{
+        ((x[0]*c[1][1]-x[1]*c[0][1])/det,(c[0][0]*x[1]-c[1][0]*x[0])/det)
+    };
+    [p0,v2add(p0,v2scale(t1,al1.max(0.0))),v2add(p3,v2scale(t2,al2.max(0.0))),p3]
+}
+
+fn max_err_idx(pts:&[(f64,f64)],u:&[f64],bez:&[(f64,f64);4])->(f64,usize){
+    (0..pts.len())
+        .map(|i|(v2dist(pts[i],eval_bezier(bez,u[i])),i))
+        .fold((0.0,0),|(md,mi),(d,i)|if d>md{(d,i)}else{(md,mi)})
+}
+
+fn fit_cubic_seg(pts:&[(f64,f64)],t1:(f64,f64),t2:(f64,f64),max_e:f64,out:&mut Vec<[(f64,f64);4]>){
+    let n=pts.len();
+    if n<2{return;}
+    if n==2{
+        let d=v2dist(pts[0],pts[1])/3.0;
+        out.push([pts[0],v2add(pts[0],v2scale(t1,d)),v2add(pts[1],v2scale(t2,d)),pts[1]]);
+        return;
+    }
+    let u=chord_params(pts);
+    let bez=fit_one_bezier(pts,&u,t1,t2);
+    let(err,si)=max_err_idx(pts,&u,&bez);
+    if err<=max_e{out.push(bez);return;}
+    // Newton reparameterize once then retry
+    let u2:Vec<f64>=(0..n).map(|i|{
+        let t0=u[i]; let mt=1.0-t0;
+        let q=eval_bezier(&bez,t0);
+        let d=v2add(v2add(v2scale(v2sub(bez[1],bez[0]),3.0*mt*mt),
+                          v2scale(v2sub(bez[2],bez[1]),6.0*mt*t0)),
+                    v2scale(v2sub(bez[3],bez[2]),3.0*t0*t0));
+        let den=v2dot(d,d);
+        if den<1e-10{t0}else{(t0-v2dot(v2sub(q,pts[i]),d)/den).clamp(0.0,1.0)}
+    }).collect();
+    let bez2=fit_one_bezier(pts,&u2,t1,t2);
+    let(err2,si2)=max_err_idx(pts,&u2,&bez2);
+    if err2<=max_e{out.push(bez2);return;}
+    // Split at point of max error
+    let si=if err2<err{si2}else{si}.clamp(1,n-2);
+    let ct=v2norm(v2sub(pts[si.saturating_sub(1)],pts[(si+1).min(n-1)]));
+    fit_cubic_seg(&pts[..=si],t1,ct,max_e,out);
+    fit_cubic_seg(&pts[si..],(-ct.0,-ct.1),t2,max_e,out);
+}
+
+/// Fit cubic Bézier curves to a closed pixel contour and append to BezPath.
+/// Replaces Douglas-Peucker + Chaikin with Schneider's least-squares algorithm.
+fn fit_bezier_contour(
+    path: &mut BezPath,
+    contour: &[(f32,f32)],
+    left_pad_px: f64,
+    baseline_px: f64,
+    scale: f64,
+) {
+    let n=contour.len();
+    if n<3{return;}
+    let pts:Vec<(f64,f64)>=contour.iter().map(|&(x,y)|(x as f64,y as f64)).collect();
+    let to_font=|p:(f64,f64)|->Point{
+        Point::new((p.0-left_pad_px)/scale,(baseline_px-p.1)/scale)
+    };
+    // Detect corners: angle between consecutive directions > 60°
+    let corners:Vec<usize>=(0..n).filter(|&i|{
+        let d1=v2norm(v2sub(pts[i],pts[(i+n-1)%n]));
+        let d2=v2norm(v2sub(pts[(i+1)%n],pts[i]));
+        v2dot(d1,d2)<0.5
+    }).collect();
+    let starts=if corners.is_empty(){vec![0]}else{corners};
+    let nc=starts.len();
+    let mut first=true;
+    for ci in 0..nc{
+        let s=starts[ci];
+        let e=starts[(ci+1)%nc];
+        let mut seg:Vec<(f64,f64)>=Vec::new();
+        let mut i=s;
+        loop{
+            seg.push(pts[i]);
+            i=(i+1)%n;
+            if i==e{seg.push(pts[e]);break;}
+            if seg.len()>n+2{break;}
+        }
+        if seg.len()<2{continue;}
+        let last=seg.len()-1;
+        let t1=v2norm(v2sub(seg[1],seg[0]));
+        let t2=v2norm(v2sub(seg[last-1],seg[last]));
+        let mut beziers:Vec<[(f64,f64);4]>=Vec::new();
+        fit_cubic_seg(&seg,t1,t2,1.5,&mut beziers);
+        for bez in &beziers{
+            if first{path.move_to(to_font(bez[0]));first=false;}
+            path.curve_to(to_font(bez[1]),to_font(bez[2]),to_font(bez[3]));
+        }
+    }
+    if !first{path.close_path();}
+}
+
+fn dilate(bitmap: &[bool], w: usize, h: usize, r: i32) -> Vec<bool> {
+    let mut out = vec![false; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            'search: for dy in -r..=r {
+                for dx in -r..=r {
+                    let nx = x as i32 + dx;
+                    let ny = y as i32 + dy;
+                    if nx >= 0 && ny >= 0 && nx < w as i32 && ny < h as i32
+                        && bitmap[ny as usize * w + nx as usize]
+                    {
+                        out[y * w + x] = true;
+                        break 'search;
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn erode(bitmap: &[bool], w: usize, h: usize, r: i32) -> Vec<bool> {
+    let mut out = bitmap.to_vec();
+    for y in 0..h {
+        for x in 0..w {
+            if !bitmap[y * w + x] { continue; }
+            'search: for dy in -r..=r {
+                for dx in -r..=r {
+                    let nx = x as i32 + dx;
+                    let ny = y as i32 + dy;
+                    if nx < 0 || ny < 0 || nx >= w as i32 || ny >= h as i32
+                        || !bitmap[ny as usize * w + nx as usize]
+                    {
+                        out[y * w + x] = false;
+                        break 'search;
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Morphological opening (erode → dilate): removes small isolated blobs.
+fn morphological_open(bitmap: &[bool], w: usize, h: usize, r: i32) -> Vec<bool> {
+    let eroded = erode(bitmap, w, h, r);
+    dilate(&eroded, w, h, r)
+}
+
+/// Remove connected components with fewer than `min_size` pixels (4-connected).
+fn remove_small_components(bitmap: &mut [bool], w: usize, h: usize, min_size: usize) {
+    let mut visited = vec![false; w * h];
+    for sy in 0..h {
+        for sx in 0..w {
+            if !bitmap[sy * w + sx] || visited[sy * w + sx] { continue; }
+            let mut component = Vec::new();
+            let mut queue = std::collections::VecDeque::new();
+            queue.push_back((sx, sy));
+            visited[sy * w + sx] = true;
+            while let Some((cx, cy)) = queue.pop_front() {
+                component.push((cx, cy));
+                for (nx, ny) in [
+                    (cx.wrapping_sub(1), cy), (cx + 1, cy),
+                    (cx, cy.wrapping_sub(1)), (cx, cy + 1),
+                ] {
+                    if nx < w && ny < h && bitmap[ny * w + nx] && !visited[ny * w + nx] {
+                        visited[ny * w + nx] = true;
+                        queue.push_back((nx, ny));
+                    }
+                }
+            }
+            if component.len() < min_size {
+                for (px, py) in component {
+                    bitmap[py * w + px] = false;
+                }
+            }
+        }
+    }
+}
+/// Debug: SDF-blend a single pair of grayscale bitmaps; returns grayscale result (0=inside, 255=outside).
+#[wasm_bindgen]
+pub fn blend_one_bitmap_debug(bmp1: &[u8], bmp2: &[u8], bitmap_size: u32, blend_factor: f32) -> Vec<u8> {
+    let sz = bitmap_size as usize;
+    let bin1: Vec<bool> = bmp1.iter().map(|&v| v < 128).collect();
+    let bin2: Vec<bool> = bmp2.iter().map(|&v| v < 128).collect();
+    let sdf1 = compute_sdf(&bin1, sz, sz);
+    let sdf2 = compute_sdf(&bin2, sz, sz);
+    let t = blend_factor.clamp(0.0, 1.0);
+    let blended_raw: Vec<bool> = sdf1.iter().zip(&sdf2)
+        .map(|(&a, &b)| a * (1.0 - t) + b * t > 0.0)
+        .collect();
+    let mut blended = morphological_open(&blended_raw, sz, sz, 2);
+    remove_small_components(&mut blended, sz, sz, 100);
+    blended.iter().map(|&b| if b { 0u8 } else { 255u8 }).collect()
+}
+
+/// Blend fonts using pre-rendered OffscreenCanvas bitmaps for the listed chars.
+/// Other glyphs are copied from font1 unchanged.
+#[wasm_bindgen]
+pub fn blend_from_canvas_bitmaps(
+    font1_data: &[u8],
+    font2_data: &[u8],
+    bitmaps1: &[u8],
+    bitmaps2: &[u8],
+    request_json: &str,
+) -> Result<Vec<u8>, JsValue> {
+    let sfnt1 = to_sfnt(font1_data).map_err(|e| JsValue::from_str(&e))?;
+    let sfnt2 = to_sfnt(font2_data).map_err(|e| JsValue::from_str(&e))?;
+    let req: BlendCanvasRequest = serde_json::from_str(request_json)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    blend_from_canvas_internal(&sfnt1, &sfnt2, bitmaps1, bitmaps2, req)
+        .map_err(|e| JsValue::from_str(&e))
+}
+
+fn blend_from_canvas_internal(
+    font1_data: &[u8],
+    font2_data: &[u8],
+    bitmaps1: &[u8],
+    bitmaps2: &[u8],
+    req: BlendCanvasRequest,
+) -> Result<Vec<u8>, String> {
+    let font1 = FontRef::new(font1_data).map_err(|e| e.to_string())?;
+    let font2 = FontRef::new(font2_data).map_err(|e| e.to_string())?;
+
+    let head1 = font1.head().map_err(|e| e.to_string())?;
+    let hhea1 = font1.hhea().map_err(|e| e.to_string())?;
+    let upem1 = head1.units_per_em() as f64;
+    let ascender1 = hhea1.ascender().to_i16() as f64;
+    let descender1 = hhea1.descender().to_i16() as f64;
+
+    let head2 = font2.head().map_err(|e| e.to_string())?;
+    let upem2 = head2.units_per_em() as f64;
+    let upem_scale2 = upem1 / upem2.max(1.0);
+
+    let glyph_count = font1.maxp().map_err(|e| e.to_string())?.num_glyphs();
+
+    let t = req.blend_factor.clamp(0.0, 1.0) as f64;
+    let bmp_sz = req.bitmap_size as usize;
+
+    // Canvas → font coordinate transform (must match JS renderGlyphToCanvas)
+    let em = (ascender1 - descender1).max(1.0);
+    let scale = (bmp_sz as f64 * 0.8) / em;
+    let baseline_px = bmp_sz as f64 * 0.5 + (ascender1 + descender1) * 0.5 * scale;
+
+    // Build glyph_id → bitmap_index and glyph_id → font2 advance maps via charmap.
+    // Both lookups go through character codes so Font2's glyph ordering doesn't matter.
+    let charmap1 = font1.charmap();
+    let charmap2 = font2.charmap();
+    let metrics1 = font1.glyph_metrics(Size::new(upem1 as f32), LocationRef::default());
+    let metrics2 = font2.glyph_metrics(Size::new(upem2 as f32), LocationRef::default());
+    let mut gid_to_bmp: HashMap<u32, usize> = HashMap::new();
+    let mut gid_to_adv2: HashMap<u32, f64> = HashMap::new();
+    for (idx, &code) in req.char_codes.iter().enumerate() {
+        if let Some(ch) = char::from_u32(code) {
+            if let Some(gid1) = charmap1.map(ch) {
+                let g1 = gid1.to_u32();
+                gid_to_bmp.entry(g1).or_insert(idx);
+                if let Some(gid2) = charmap2.map(ch) {
+                    let adv2 = metrics2.advance_width(gid2).unwrap_or(upem2 as f32 * 0.5) as f64
+                        * upem_scale2;
+                    gid_to_adv2.entry(g1).or_insert(adv2);
+                }
+            }
+        }
+    }
+
+    let outlines1 = font1.outline_glyphs();
+
+    let mut glyf_builder = GlyfLocaBuilder::new();
+    let mut h_metrics: Vec<LongMetric> = Vec::with_capacity(glyph_count as usize);
+
+    for gid_u16 in 0..glyph_count {
+        let gid = skrifa::GlyphId::new(gid_u16 as u32);
+        let adv1 = metrics1.advance_width(gid).unwrap_or(upem1 as f32 * 0.5) as f64;
+        let adv2 = gid_to_adv2.get(&(gid_u16 as u32)).copied().unwrap_or(adv1);
+        let blended_advance = (adv1 + (adv2 - adv1) * t).round() as u16;
+
+        // SDF blend from canvas bitmaps
+        if let Some(&bmp_idx) = gid_to_bmp.get(&(gid_u16 as u32)) {
+            let bstart = bmp_idx * bmp_sz * bmp_sz;
+            let bend = bstart + bmp_sz * bmp_sz;
+            if bend <= bitmaps1.len() && bend <= bitmaps2.len() {
+                let left_pad_px = ((bmp_sz as f64 - adv1 * scale) / 2.0).max(0.0);
+                let bin1: Vec<bool> = bitmaps1[bstart..bend].iter().map(|&v| v < 128).collect();
+                let bin2: Vec<bool> = bitmaps2[bstart..bend].iter().map(|&v| v < 128).collect();
+                let sdf1 = compute_sdf(&bin1, bmp_sz, bmp_sz);
+                let sdf2 = compute_sdf(&bin2, bmp_sz, bmp_sz);
+                let norm = |sdf: &[f32]| -> Vec<f32> {
+                    let mx = sdf.iter().cloned().map(f32::abs).fold(0.0f32, f32::max).max(1.0);
+                    sdf.iter().map(|&v| v / mx).collect()
+                };
+                let sdf1n = norm(&sdf1);
+                let sdf2n = norm(&sdf2);
+                let tf = t as f32;
+                let blended_raw: Vec<bool> = sdf1n.iter().zip(&sdf2n)
+                    .map(|(&a, &b)| a * (1.0 - tf) + b * tf > 0.0)
+                    .collect();
+                let mut blended = morphological_open(&blended_raw, bmp_sz, bmp_sz, 2);
+                remove_small_components(&mut blended, bmp_sz, bmp_sz, 100);
+                let raw_contours = trace_contours(&blended, bmp_sz, bmp_sz);
+                let mut full_path = BezPath::new();
+                for contour in &raw_contours {
+                    fit_bezier_contour(&mut full_path, contour, left_pad_px, baseline_px, scale);
+                }
+                let g = if full_path.is_empty() {
+                    WriteGlyph::Empty
+                } else {
+                    let quad = cubics_to_quads(&full_path);
+                    SimpleGlyph::from_bezpath(&quad).map(WriteGlyph::from).unwrap_or(WriteGlyph::Empty)
+                };
+                let lsb = match &g { WriteGlyph::Simple(sg) => sg.bbox.x_min, _ => 0 };
+                glyf_builder.add_glyph(&g).map_err(|e| e.to_string())?;
+                h_metrics.push(LongMetric { advance: blended_advance, side_bearing: lsb });
+                continue;
+            }
+        }
+
+        // Copy font1 outline unchanged
+        let mut pen1 = CollectPen::new();
+        let ds = DrawSettings::unhinted(Size::new(upem1 as f32), LocationRef::default());
+        let has1 = outlines1.get(gid).and_then(|g| g.draw(ds, &mut pen1).ok()).is_some() && !pen1.path.is_empty();
+        if has1 {
+            let quad = cubics_to_quads(&pen1.path);
+            let g = SimpleGlyph::from_bezpath(&quad).map(WriteGlyph::from).unwrap_or(WriteGlyph::Empty);
+            let lsb = match &g { WriteGlyph::Simple(sg) => sg.bbox.x_min, _ => 0 };
+            glyf_builder.add_glyph(&g).map_err(|e| e.to_string())?;
+            h_metrics.push(LongMetric { advance: blended_advance, side_bearing: lsb });
+        } else {
+            glyf_builder.add_glyph(&WriteGlyph::Empty).map_err(|e| e.to_string())?;
+            h_metrics.push(LongMetric { advance: blended_advance, side_bearing: 0 });
+        }
+    }
+
+    let (new_glyf, new_loca, loca_format) = glyf_builder.build();
+    let new_glyf_bytes = dump_table(&new_glyf).map_err(|e| e.to_string())?;
+    let new_loca_bytes = dump_table(&new_loca).map_err(|e| e.to_string())?;
+    let hmtx = Hmtx::new(h_metrics, vec![]);
+
+    let mut head_bytes = font1.table_data(ReadTag::new(b"head")).ok_or("no head table")?.as_bytes().to_vec();
+    let loca_fmt_val: u16 = match loca_format {
+        write_fonts::tables::loca::LocaFormat::Long => 1,
+        write_fonts::tables::loca::LocaFormat::Short => 0,
+    };
+    patch_u16(&mut head_bytes, 50, loca_fmt_val);
+    patch_u16(&mut head_bytes, 8, 0);
+    patch_u16(&mut head_bytes, 10, 0);
+
+    let mut hhea_bytes = font1.table_data(ReadTag::new(b"hhea")).ok_or("no hhea table")?.as_bytes().to_vec();
+    patch_u16(&mut hhea_bytes, 34, glyph_count);
+
+    let empty_colr = ColrInput::default();
+    let (colr, cpal) = build_colr_cpal(
+        glyph_count, &empty_colr,
+        head1.units_per_em(), hhea1.ascender().to_i16(), hhea1.descender().to_i16(),
+    );
+    let maxp = Maxp {
+        num_glyphs: glyph_count,
+        max_points: Some(0), max_contours: Some(0),
+        max_composite_points: Some(0), max_composite_contours: Some(0),
+        max_zones: Some(2), max_twilight_points: Some(0), max_storage: Some(0),
+        max_function_defs: Some(0), max_instruction_defs: Some(0),
+        max_stack_elements: Some(0), max_size_of_instructions: Some(0),
+        max_component_elements: Some(0), max_component_depth: Some(0),
+    };
+    let name_bytes = font1.table_data(ReadTag::new(b"name"))
+        .map(|d| patch_name_table(d.as_bytes(), "Blend"))
+        .unwrap_or_default();
+
+    let skip: &[[u8; 4]] = &[
+        *b"glyf", *b"loca", *b"hmtx", *b"maxp", *b"head", *b"hhea",
+        *b"name", *b"COLR", *b"CPAL",
+        *b"CFF ", *b"CFF2", *b"HVAR", *b"VVAR", *b"MVAR", *b"STAT", *b"fvar", *b"gvar",
+    ];
+    let mut builder = FontBuilder::new();
+    copy_tables_except(&mut builder, font1_data, &font1, skip);
+    builder.add_raw(Tag::new(b"name"), name_bytes);
+    builder.add_raw(Tag::new(b"glyf"), new_glyf_bytes);
+    builder.add_raw(Tag::new(b"loca"), new_loca_bytes);
+    builder.add_raw(Tag::new(b"head"), head_bytes);
+    builder.add_raw(Tag::new(b"hhea"), hhea_bytes);
+
+    let font_bytes = builder
+        .add_table(&maxp).map_err(|e| e.to_string())?
+        .add_table(&hmtx).map_err(|e| e.to_string())?
+        .add_table(&cpal).map_err(|e| e.to_string())?
+        .add_table(&colr).map_err(|e| e.to_string())?
+        .build();
+
+    Ok(font_bytes)
 }
 
 fn build_palette(colr: &ColrInput) -> (Vec<ColorRecord>, u16, u16, u16, u16, u16) {

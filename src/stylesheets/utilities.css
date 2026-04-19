@@ -50,4 +50,14 @@
   .btn:not(:disabled):hover {
     opacity: 0.85;
   }
+
+  .btn.active {
+    background: var(--color-active);
+    color: #fff;
+    border-color: var(--color-active);
+  }
+
+  .btn--secondary {
+    background: var(--color-accent--secondary);
+  }
 }

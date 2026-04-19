@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { DEFAULT_TEXT } from '#shared/constants'
+import BlendButtons from '@/components/BlendButtons.vue'
+import ClearButton from '@/components/ClearButton.vue'
 import FontUpload from '@/components/FontUpload.vue'
 import GlyphDisplay from '@/components/GlyphDisplay.vue'
 import LetterInput from '@/components/LetterInput.vue'
@@ -15,7 +17,15 @@ const {
   error: fontError,
   loadFont,
   styleFont,
+  blendFontsSdfCanvas,
   resetFont,
+} = useFontWasm()
+
+const {
+  fontData: blendFontData,
+  fontInfo: blendFontInfo,
+  loadFont: loadBlendFont,
+  resetFont: resetBlendFont,
 } = useFontWasm()
 
 const text = ref(DEFAULT_TEXT)
@@ -27,14 +37,32 @@ const fontName = ref<string | null>(null)
 // Styled font bytes — null means use original font
 const styledFontBytes = ref<Uint8Array | null>(null)
 const isColrEnabled = ref(true)
+const activeTab = ref<'mood' | 'blend'>('mood')
+
+const blendFontName = ref<string | null>(null)
+const blendFactor = ref(0.5)
+const blendStyledFontBytes = ref<Uint8Array | null>(null)
+const blendStyledFontFamily = ref<string | null>(null)
+const blendBaseFontFamily = ref<string | null>(null)
 
 // Unique CSS font-family name, incremented on each font upload to avoid cache issues
 let fontCounter = 0
 const baseFontFamily = ref<string | null>(null)
 const styledFontFamily = ref<string | null>(null)
 
-// The font-family shown in GlyphDisplay: styled if available, else original
-const displayFontFamily = computed(() => styledFontFamily.value ?? baseFontFamily.value)
+// The font-family shown in GlyphDisplay: mood-styled → blend-styled → original
+const displayFontFamily = computed(
+  () => styledFontFamily.value ?? blendStyledFontFamily.value ?? baseFontFamily.value,
+)
+
+const activeDownloadBytes = computed(() => styledFontBytes.value ?? blendStyledFontBytes.value)
+const activeDownloadName = computed(() => {
+  if (styledFontBytes.value)
+    return `${fontName.value ?? 'fontplay'}-${activeProperty.value ?? 'styled'}`
+  if (blendStyledFontBytes.value)
+    return `${fontName.value ?? 'font1'}-x-${blendFontName.value ?? 'font2'}-blend`
+  return null
+})
 
 // Inject @font-face into document head
 function injectFontFace(family: string, bytes: Uint8Array) {
@@ -74,11 +102,66 @@ function onRemoveFont() {
   styledFontFamily.value = null
   styledFontBytes.value = null
   activeProperty.value = null
+  blendStyledFontBytes.value = null
+  blendStyledFontFamily.value = null
   aiError.value = null
 }
 
 function onWrite(letters: string) {
   text.value = letters
+}
+
+function onRemoveBlendFont() {
+  resetBlendFont()
+  blendFontName.value = null
+  blendStyledFontBytes.value = null
+  blendStyledFontFamily.value = null
+  blendBaseFontFamily.value = null
+}
+
+async function onBlendUpload(file: File) {
+  aiError.value = null
+  blendFontName.value = file.name.replace(/\.[^.]+$/, '')
+  blendStyledFontBytes.value = null
+  blendStyledFontFamily.value = null
+  blendBaseFontFamily.value = null
+  styledFontBytes.value = null
+  styledFontFamily.value = null
+  activeProperty.value = null
+  await loadBlendFont(file)
+  if (blendFontData.value) {
+    fontCounter++
+    const family = `fontplay-blend-base-${fontCounter}`
+    blendBaseFontFamily.value = family
+    injectFontFace(family, blendFontData.value)
+  }
+}
+
+async function onBlend() {
+  if (!blendFontData.value || !baseFontFamily.value || !blendBaseFontFamily.value) return
+  isAiLoading.value = true
+  aiError.value = null
+  await new Promise((r) => setTimeout(r, 0))
+  try {
+    const bytes = await blendFontsSdfCanvas(
+      blendFontData.value,
+      baseFontFamily.value,
+      blendBaseFontFamily.value,
+      text.value,
+      blendFactor.value,
+    )
+    if (bytes) {
+      blendStyledFontBytes.value = bytes
+      fontCounter++
+      const family = `fontplay-blend-${fontCounter}`
+      blendStyledFontFamily.value = family
+      injectFontFace(family, bytes)
+    }
+  } catch (e) {
+    aiError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    isAiLoading.value = false
+  }
 }
 
 async function onStyle(property: string | null) {
@@ -90,6 +173,8 @@ async function onStyle(property: string | null) {
   }
   if (!fontInfo.value) return
 
+  blendStyledFontBytes.value = null
+  blendStyledFontFamily.value = null
   isAiLoading.value = true
   aiError.value = null
   try {
@@ -114,13 +199,14 @@ async function onStyle(property: string | null) {
 }
 
 function downloadFont() {
-  const bytes = styledFontBytes.value
-  if (!bytes) return
+  const bytes = activeDownloadBytes.value
+  const name = activeDownloadName.value
+  if (!bytes || !name) return
   const blob = new Blob([new Uint8Array(bytes)], { type: 'font/ttf' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `${fontName.value ?? 'fontplay'}-${activeProperty.value ?? 'styled'}.ttf`
+  a.download = `${name}.ttf`
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
@@ -143,7 +229,7 @@ function downloadFont() {
           <p aria-live="polite" class="font-bar-info text-size-m">
             {{ fontName }} — {{ fontInfo.glyphCount }} glyphs · {{ fontInfo.unitsPerEm }} UPM
           </p>
-          <button class="btn" aria-label="Remove font" @click="onRemoveFont">✕</button>
+          <ClearButton label="Remove font" @click="onRemoveFont" />
         </div>
       </template>
       <p v-if="isFontLoading" aria-live="polite" class="loading">Reading font…</p>
@@ -165,14 +251,26 @@ function downloadFont() {
     </section>
 
     <section v-if="fontInfo && !isFontLoading" aria-label="Style">
-      <MoodButtons :isLoading="isAiLoading" :activeProperty="activeProperty" @style="onStyle" />
-      <p v-if="isAiLoading" aria-live="polite" class="loading">Generating style…</p>
+      <div class="tabs" role="tablist">
+        <button role="tab" :aria-selected="activeTab === 'mood'" :class="['btn', { active: activeTab === 'mood' }]"
+          @click="activeTab = 'mood'">Mood</button>
+        <button role="tab" :aria-selected="activeTab === 'blend'" :class="['btn', { active: activeTab === 'blend' }]"
+          @click="activeTab = 'blend'">Blend</button>
+      </div>
+      <div class="container">
+        <MoodButtons v-if="activeTab === 'mood'" :isLoading="isAiLoading" :activeProperty="activeProperty"
+          @style="onStyle" />
+        <BlendButtons v-else-if="activeTab === 'blend'" :isLoading="isAiLoading" :blendFontName="blendFontName"
+          :blendFontInfo="blendFontInfo" v-model:blendFactor="blendFactor" @upload="onBlendUpload" @blend="onBlend"
+          @removeBlendFont="onRemoveBlendFont" />
+      </div>
+      <p v-if="isAiLoading" aria-live="polite" class="loading">{{ activeTab === 'blend' ? 'Blending…' : 'Generating…' }}</p>
       <p v-else-if="aiError" role="alert" class="error">{{ aiError }}</p>
     </section>
 
-    <section v-if="styledFontBytes" aria-label="Export">
+    <section v-if="activeDownloadBytes" aria-label="Export">
       <button class="btn" @click="downloadFont">
-        Download {{ fontName }}-{{ activeProperty }}.ttf
+        Download {{ activeDownloadName }}.ttf
       </button>
     </section>
   </main>
@@ -194,6 +292,12 @@ function downloadFont() {
   display: flex;
   justify-content: flex-end;
   margin-top: 0.5rem;
+}
+
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
 }
 
 .colrv1-toggle {

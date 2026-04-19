@@ -18,18 +18,10 @@ const fontSize = computed(() => {
 
 <template>
   <div class="display" role="img" :aria-label="text || 'No text entered'">
-    <p
-      v-if="text && fontFamily"
-      class="display-text"
-      :style="{ fontFamily: `'${fontFamily}', sans-serif`, fontSize }"
-    >
+    <p v-if="text && fontFamily" class="display-text" :style="{ fontFamily: `'${fontFamily}', sans-serif`, fontSize }">
       {{ text }}
     </p>
-    <p
-      v-else-if="text"
-      class="display-text display-text--plain"
-      :style="{ fontSize }"
-    >
+    <p v-else-if="text" class="display-text display-text--plain" :style="{ fontSize }">
       {{ text }}
     </p>
     <p v-else class="placeholder">Upload a font and type some text</p>

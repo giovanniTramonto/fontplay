@@ -5,6 +5,10 @@ export interface LLMResult {
   colr: ColrConfig
 }
 
+export interface BlendLLMResult {
+  blendFactor: number
+}
+
 export function extractResult(raw: string): LLMResult | null {
   const match = raw.match(/\{[\s\S]*\}/)
   if (!match) return null
@@ -34,6 +38,21 @@ export function extractResult(raw: string): LLMResult | null {
   }
 
   return null
+}
+
+export function extractBlendResult(raw: string): BlendLLMResult | null {
+  const match = raw.match(/\{[\s\S]*\}/)
+  if (!match) return { blendFactor: 0.5 }
+  try {
+    const parsed = JSON.parse(match[0]) as Record<string, unknown>
+    const blendFactor =
+      typeof parsed.blendFactor === 'number'
+        ? Math.max(0, Math.min(1, parsed.blendFactor))
+        : 0.5
+    return { blendFactor }
+  } catch {
+    return { blendFactor: 0.5 }
+  }
 }
 
 function parseColr(raw: unknown): ColrConfig {
