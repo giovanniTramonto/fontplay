@@ -266,7 +266,8 @@ function downloadFont() {
     </section>
 
     <section v-if="fontInfo && !isFontLoading" aria-label="Glyph display">
-      <GlyphDisplay :text="text" :fontFamily="baseFontFamily" :resultFontFamily="resultFontFamily" />
+      <GlyphDisplay :text="text" :fontFamily="baseFontFamily" :resultFontFamily="resultFontFamily"
+        :resultText="activeTab === 'recombine' && recombineStyledFontFamily ? recombineChar : undefined" />
     </section>
 
     <section v-if="fontInfo && !isFontLoading" aria-label="Letter input">

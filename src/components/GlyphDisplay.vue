@@ -5,6 +5,7 @@ const props = defineProps<{
   text: string
   fontFamily: string | null
   resultFontFamily?: string | null
+  resultText?: string
 }>()
 
 const fontSize = computed(() => {
@@ -32,9 +33,9 @@ const fontSize = computed(() => {
     </div>
 
     <div v-if="resultFontFamily" class="panel">
-      <div class="display" role="img" :aria-label="text || 'No text entered'">
-        <p v-if="text" class="display-text" :style="{ fontFamily: `'${resultFontFamily}', sans-serif`, fontSize }">
-          {{ text }}
+      <div class="display" role="img" :aria-label="resultText ?? text">
+        <p v-if="resultText ?? text" class="display-text" :style="{ fontFamily: `'${resultFontFamily}', sans-serif`, fontSize }">
+          {{ resultText ?? text }}
         </p>
         <p v-else class="placeholder">Upload a font and type some text</p>
       </div>
