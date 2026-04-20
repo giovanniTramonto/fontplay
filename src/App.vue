@@ -6,7 +6,6 @@ import FontBar from '@/components/FontBar.vue'
 import FontUpload from '@/components/FontUpload.vue'
 import RecombineButtons from '@/components/RecombineButtons.vue'
 import GlyphDisplay from '@/components/GlyphDisplay.vue'
-import LetterInput from '@/components/LetterInput.vue'
 import StyleButtons from '@/components/StyleButtons.vue'
 import { useFontWasm } from '@/composables/useFontWasm'
 import { askLLM } from '@/composables/useLLM'
@@ -113,10 +112,6 @@ function onRemoveFont() {
   blendStyledFontBytes.value = null
   blendStyledFontFamily.value = null
   aiError.value = null
-}
-
-function onWrite(letters: string) {
-  text.value = letters
 }
 
 async function onRecombine() {
@@ -261,12 +256,8 @@ function downloadFont() {
     </section>
 
     <section v-if="fontInfo && !isFontLoading" aria-label="Glyph display">
-      <GlyphDisplay :text="text" :fontFamily="baseFontFamily" :resultFontFamily="resultFontFamily"
+      <GlyphDisplay v-model="text" editable :fontFamily="baseFontFamily" :resultFontFamily="resultFontFamily"
         :resultText="activeTab === 'recombine' && recombineStyledFontFamily ? recombineChar : undefined" />
-    </section>
-
-    <section v-if="fontInfo && !isFontLoading" aria-label="Letter input">
-      <LetterInput @write="onWrite" />
     </section>
 
     <section v-if="fontInfo && !isFontLoading" aria-label="Style">

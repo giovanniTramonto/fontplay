@@ -19,17 +19,17 @@ const properties = [
 
 <template>
   <div>
-  <label class="colrv1-toggle text-size-m">
-    <input v-model="isColrEnabled" type="checkbox" />
-    Enable COLRv1
-  </label>
-  <div class="style-buttons">
-    <button v-for="{ id, label } in properties" :key="id" :disabled="isLoading"
-      :class="['btn btn--secondary', { active: activeProperty === id }]"
-      @click="emit('style', activeProperty === id ? null : id)">
-      {{ label }}
-    </button>
-  </div>
+    <div class="style-buttons">
+      <button v-for="{ id, label } in properties" :key="id" :disabled="isLoading"
+        :class="['btn btn--secondary', { active: activeProperty === id }]"
+        @click="emit('style', activeProperty === id ? null : id)">
+        {{ label }}
+      </button>
+    </div>
+    <label class="colrv1-toggle text-size-m">
+      <input v-model="isColrEnabled" type="checkbox" />
+      Enable COLRv1
+    </label>
   </div>
 </template>
 
