@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { DEFAULT_TEXT } from '#shared/constants'
 import BlendButtons from '@/components/BlendButtons.vue'
-import ClearButton from '@/components/ClearButton.vue'
+import FontBar from '@/components/FontBar.vue'
 import FontUpload from '@/components/FontUpload.vue'
 import RecombineButtons from '@/components/RecombineButtons.vue'
 import GlyphDisplay from '@/components/GlyphDisplay.vue'
@@ -244,7 +244,7 @@ function downloadFont() {
 </script>
 
 <template>
-  <main>
+  <main class="main">
     <header>
       <h1>fontplay</h1>
     </header>
@@ -254,12 +254,7 @@ function downloadFont() {
         <FontUpload @upload="onFontUpload" />
       </template>
       <template v-else>
-        <div class="font-bar">
-          <p aria-live="polite" class="font-bar-info text-size-m">
-            {{ fontName }} — {{ fontInfo.glyphCount }} glyphs · {{ fontInfo.unitsPerEm }} UPM
-          </p>
-          <ClearButton label="Remove font" @click="onRemoveFont" />
-        </div>
+        <FontBar :name="fontName ?? ''" :fontInfo="fontInfo" @clear="onRemoveFont" />
       </template>
       <p v-if="isFontLoading" aria-live="polite" class="loading">Reading font…</p>
       <p v-else-if="fontError" role="alert" class="error">{{ fontError }}</p>
@@ -280,8 +275,8 @@ function downloadFont() {
           @click="activeTab = 'mood'">Mood</button>
         <button role="tab" :aria-selected="activeTab === 'blend'" :class="['btn', { active: activeTab === 'blend' }]"
           @click="activeTab = 'blend'">Blend</button>
-        <button role="tab" :aria-selected="activeTab === 'recombine'" :class="['btn', { active: activeTab === 'recombine' }]"
-          @click="activeTab = 'recombine'">Recombine</button>
+        <button role="tab" :aria-selected="activeTab === 'recombine'"
+          :class="['btn', { active: activeTab === 'recombine' }]" @click="activeTab = 'recombine'">Recombine</button>
       </div>
       <div class="container">
         <MoodButtons v-if="activeTab === 'mood'" :isLoading="isAiLoading" :activeProperty="activeProperty"
@@ -289,33 +284,33 @@ function downloadFont() {
         <BlendButtons v-else-if="activeTab === 'blend'" :isLoading="isAiLoading" :blendFontName="blendFontName"
           :blendFontInfo="blendFontInfo" v-model:blendFactor="blendFactor" @upload="onBlendUpload" @blend="onBlend"
           @removeBlendFont="onRemoveBlendFont" />
-        <RecombineButtons v-else-if="activeTab === 'recombine'" :isLoading="isAiLoading"
-          :blendFontName="blendFontName" :blendFontInfo="blendFontInfo"
-          @upload="onBlendUpload" @recombine="onRecombine" @removeBlendFont="onRemoveBlendFont" />
+        <RecombineButtons v-else-if="activeTab === 'recombine'" :isLoading="isAiLoading" :blendFontName="blendFontName"
+          :blendFontInfo="blendFontInfo" @upload="onBlendUpload" @recombine="onRecombine"
+          @removeBlendFont="onRemoveBlendFont" />
       </div>
-      <p v-if="isAiLoading" aria-live="polite" class="loading">{{ activeTab === 'blend' ? 'Blending…' : activeTab === 'recombine' ? 'Recombining…' : 'Generating…' }}</p>
+      <p v-if="isAiLoading" aria-live="polite" class="loading">{{ activeTab === 'blend' ? 'Blending…' : activeTab ===
+        'recombine' ? 'Recombining…' : 'Generating…' }}</p>
       <p v-else-if="aiError" role="alert" class="error">{{ aiError }}</p>
     </section>
 
-    <section v-if="activeDownloadBytes" aria-label="Export">
-      <button class="btn" @click="downloadFont">
-        Download {{ activeDownloadName }}.ttf
+    <section class="export-section" v-if="activeDownloadBytes" aria-label="Export">
+      <button class="btn" @click="downloadFont" :title="`${activeDownloadName}.ttf`">
+        Download TTF
       </button>
     </section>
   </main>
 </template>
 
 <style scoped>
-.font-bar {
+.main {
+  max-width: 1200px;
+  margin-inline: auto;
+  padding: 2rem 1rem;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
+  flex-direction: column;
+  gap: var(--gap);
 }
 
-.font-bar-info {
-  margin: 0;
-}
 
 .tabs {
   display: flex;
@@ -323,4 +318,8 @@ function downloadFont() {
   margin-bottom: 0.75rem;
 }
 
+.export-section {
+  display: flex;
+  justify-content: flex-end;
+}
 </style>
