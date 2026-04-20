@@ -5,7 +5,6 @@ Return ONLY a JSON object — no markdown, no explanation, no surrounding text.
 
 Available transforms (can combine multiple):
   {"type": "scaleX",      "factor": <0.4–2.0>}              — compress or stretch horizontally
-  {"type": "scaleY",      "factor": <0.4–2.0>}              — compress or stretch vertically
   {"type": "shear",       "angle": <-30 to 30>}             — slant / italicize
   {"type": "jitter",      "amplitude": <1–40>}              — random per-point noise (chaotic/rough)
   {"type": "wave",        "amplitude": <3–30>, "frequency": <0.002–0.02>} — horizontal sine distortion (shifts left-right based on y)
@@ -31,7 +30,7 @@ Mood recipes:
   Color space: achromatic or near-achromatic — dark neutrals, grays, off-blacks, deep slates. Low saturation. Add shadow.
 
 "cyber"
-  Transforms: scaleX 0.50–0.68 + scaleY 1.20–1.50 + shear 5 to 12. Keep it slim and precise.
+  Transforms: scaleX 0.50–0.68 + shear 5 to 12. Keep it slim and precise.
   Effects: MUST use "gradient". Add "outline" with a bright neon outlineColor (cyan, electric blue, lime). gradientColors must have exactly 3 colors spanning deep dark → vivid mid → near-black or dark accent.
   No shadow, no fill.
 
@@ -44,7 +43,7 @@ Mood recipes:
   Color space: aggressive, high-contrast — deep reds, pure blacks, acid greens, bruised purples. High drama, low softness.
 
 "cool"
-  Transforms: scaleX 0.65–0.78 + rotate angle -8 to 8 + scaleY 1.05–1.18. DO NOT use shear, wave, or jitter.
+  Transforms: scaleX 0.65–0.78 + rotate angle -8 to 8. DO NOT use shear, wave, or jitter.
   Color space: cool mid-darks — indigos, deep purples, cobalt blues, dark teals. MUST use "3d-blocks" + "fill" + "highlight"; blockColor much darker than fillColor. Add shadow.
 
 Response format:

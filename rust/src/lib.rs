@@ -106,7 +106,6 @@ struct BlendCanvasRequest {
 #[serde(tag = "type", rename_all = "camelCase")]
 enum Transform {
     ScaleX { factor: f32 },
-    ScaleY { factor: f32 },
     Shear { angle: f32 },
     Jitter { amplitude: f32 },
     Wave { amplitude: f32, frequency: f32 },
@@ -154,8 +153,7 @@ fn transform_point(
     let mut ny = y;
     for t in transforms {
         match t {
-            Transform::ScaleX { factor } => nx *= *factor as f64,
-            Transform::ScaleY { factor } => ny *= *factor as f64,
+            Transform::ScaleX { factor } => nx = cx + (nx - cx) * (*factor as f64),
             Transform::Shear { angle } => {
                 nx += ny * (*angle as f64 * std::f64::consts::PI / 180.0).tan();
             }

@@ -16,7 +16,7 @@ export function extractResult(raw: string): LLMResult | null {
   try {
     const parsed = JSON.parse(match[0]) as Record<string, unknown>
 
-    const knownTransforms = new Set(['scaleX', 'scaleY', 'shear', 'jitter', 'wave', 'waveY', 'rotate', 'perspective', 'arch'])
+    const knownTransforms = new Set(['scaleX', 'shear', 'jitter', 'wave', 'waveY', 'rotate', 'perspective', 'arch'])
     const transforms = Array.isArray(parsed.transforms)
       ? (parsed.transforms as Transform[]).filter((t) => t && knownTransforms.has((t as { type: string }).type))
       : []
