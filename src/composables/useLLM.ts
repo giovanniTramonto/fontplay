@@ -8,7 +8,7 @@ interface OllamaResponse {
   message: { content: string }
 }
 
-export interface MoodResult {
+export interface StyleResult {
   transforms: Transform[]
   colr: ColrConfig
 }
@@ -31,7 +31,7 @@ function getSessionId(): string {
   return id
 }
 
-export async function askLLM(property: string): Promise<MoodResult> {
+export async function askLLM(property: string): Promise<StyleResult> {
   if (import.meta.env.VITE_OLLAMA_URL) return askOllama(property)
   return askNetlify(property)
 }
@@ -116,7 +116,7 @@ export async function askBlendLLM(
   return askBlendNetlify(font1Name, font2Name, font1Paths, font2Paths)
 }
 
-async function askNetlify(property: string): Promise<MoodResult> {
+async function askNetlify(property: string): Promise<StyleResult> {
   const response = await fetch('/api/ask', {
     method: 'POST',
     headers: {
@@ -139,7 +139,7 @@ async function askNetlify(property: string): Promise<MoodResult> {
   }
 }
 
-async function askOllama(property: string): Promise<MoodResult> {
+async function askOllama(property: string): Promise<StyleResult> {
   const response = await fetch(import.meta.env.VITE_OLLAMA_URL as string, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

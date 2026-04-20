@@ -7,7 +7,7 @@ import FontUpload from '@/components/FontUpload.vue'
 import RecombineButtons from '@/components/RecombineButtons.vue'
 import GlyphDisplay from '@/components/GlyphDisplay.vue'
 import LetterInput from '@/components/LetterInput.vue'
-import MoodButtons from '@/components/MoodButtons.vue'
+import StyleButtons from '@/components/StyleButtons.vue'
 import { useFontWasm } from '@/composables/useFontWasm'
 import { askLLM } from '@/composables/useLLM'
 
@@ -39,7 +39,7 @@ const fontName = ref<string | null>(null)
 // Styled font bytes — null means use original font
 const styledFontBytes = ref<Uint8Array | null>(null)
 const isColrEnabled = ref(true)
-const activeTab = ref<'mood' | 'blend' | 'recombine'>('mood')
+const activeTab = ref<'style' | 'blend' | 'recombine'>('style')
 
 const blendFontName = ref<string | null>(null)
 const blendFactor = ref(0.5)
@@ -271,15 +271,15 @@ function downloadFont() {
 
     <section v-if="fontInfo && !isFontLoading" aria-label="Style">
       <div class="tabs" role="tablist">
-        <button role="tab" :aria-selected="activeTab === 'mood'" :class="['btn', { active: activeTab === 'mood' }]"
-          @click="activeTab = 'mood'">Mood</button>
+        <button role="tab" :aria-selected="activeTab === 'style'" :class="['btn', { active: activeTab === 'style' }]"
+          @click="activeTab = 'style'">Style</button>
         <button role="tab" :aria-selected="activeTab === 'blend'" :class="['btn', { active: activeTab === 'blend' }]"
           @click="activeTab = 'blend'">Blend</button>
         <button role="tab" :aria-selected="activeTab === 'recombine'"
           :class="['btn', { active: activeTab === 'recombine' }]" @click="activeTab = 'recombine'">Recombine</button>
       </div>
       <div class="container">
-        <MoodButtons v-if="activeTab === 'mood'" :isLoading="isAiLoading" :activeProperty="activeProperty"
+        <StyleButtons v-if="activeTab === 'style'" :isLoading="isAiLoading" :activeProperty="activeProperty"
           v-model:isColrEnabled="isColrEnabled" @style="onStyle" />
         <BlendButtons v-else-if="activeTab === 'blend'" :isLoading="isAiLoading" :blendFontName="blendFontName"
           :blendFontInfo="blendFontInfo" v-model:blendFactor="blendFactor" @upload="onBlendUpload" @blend="onBlend"
