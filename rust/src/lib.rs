@@ -91,7 +91,7 @@ struct StyleFontRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RecombineRequest {
-    char_paths: HashMap<String, String>,
+    char_paths: HashMap<String, Vec<Vec<[f64; 2]>>>,
 }
 
 #[derive(Deserialize)]
@@ -1528,111 +1528,70 @@ fn build_palette(colr: &ColrInput) -> (Vec<ColorRecord>, u16, u16, u16, u16, u16
 
 // ─── SVG path parser ─────────────────────────────────────────────────────────
 
-fn take_f64(tokens: &[String], i: &mut usize) -> Option<f64> {
-    tokens.get(*i).and_then(|s| s.parse().ok()).map(|v| { *i += 1; v })
-}
-
-/// Parse an SVG path string (viewBox 0 0 1000 1000, y-down) into a BezPath in font space.
-fn parse_svg_path(d: &str, upem: f64, ascender: f64, descender: f64) -> BezPath {
+fn contours_to_bezpath(contours: &[Vec<[f64; 2]>], upem: f64, ascender: f64, descender: f64) -> BezPath {
     let sx = upem / 1000.0;
     let em = (ascender - descender).max(1.0);
     let to_font = |x: f64, y: f64| Point::new(x * sx, ascender - y / 1000.0 * em);
-
-    // Tokenize: command letters and numbers (handle '-' as number start)
-    let mut tokens: Vec<String> = Vec::new();
-    let mut buf = String::new();
-    for ch in d.chars() {
-        if "MmLlCcQqZzHhVvSs".contains(ch) {
-            if !buf.is_empty() { tokens.push(buf.clone()); buf.clear(); }
-            tokens.push(ch.to_string());
-        } else if ch == ' ' || ch == ',' || ch == '\t' || ch == '\n' || ch == '\r' {
-            if !buf.is_empty() { tokens.push(buf.clone()); buf.clear(); }
-        } else if ch == '-' && !buf.is_empty() && buf != "-" {
-            tokens.push(buf.clone()); buf.clear();
-            buf.push(ch);
-        } else {
-            buf.push(ch);
-        }
-    }
-    if !buf.is_empty() { tokens.push(buf); }
-
     let mut path = BezPath::new();
-    let mut cx = 0.0f64;
-    let mut cy = 0.0f64;
-    let mut mx = 0.0f64;
-    let mut my = 0.0f64;
-    let mut cmd = 'M';
-    let mut i = 0;
-
-    while i < tokens.len() {
-        let tok = &tokens[i];
-        if tok.len() == 1 {
-            if let Some(c) = tok.chars().next() {
-                if c.is_ascii_alphabetic() {
-                    i += 1;
-                    if c == 'Z' || c == 'z' {
-                        path.close_path();
-                        cx = mx; cy = my;
-                    } else {
-                        cmd = c;
-                    }
-                    continue;
-                }
-            }
+    for contour in contours {
+        if contour.is_empty() { continue; }
+        path.move_to(to_font(contour[0][0], contour[0][1]));
+        for pt in &contour[1..] {
+            path.line_to(to_font(pt[0], pt[1]));
         }
-        let prev = i;
-        match cmd {
-            'M' => { let x = take_f64(&tokens, &mut i); let y = take_f64(&tokens, &mut i);
-                if let (Some(x), Some(y)) = (x, y) { cx=x; cy=y; mx=cx; my=cy; path.move_to(to_font(cx,cy)); cmd='L'; } }
-            'm' => { let x = take_f64(&tokens, &mut i); let y = take_f64(&tokens, &mut i);
-                if let (Some(dx), Some(dy)) = (x, y) { cx+=dx; cy+=dy; mx=cx; my=cy; path.move_to(to_font(cx,cy)); cmd='l'; } }
-            'L' => { let x = take_f64(&tokens, &mut i); let y = take_f64(&tokens, &mut i);
-                if let (Some(x), Some(y)) = (x, y) { cx=x; cy=y; path.line_to(to_font(cx,cy)); } }
-            'l' => { let x = take_f64(&tokens, &mut i); let y = take_f64(&tokens, &mut i);
-                if let (Some(dx), Some(dy)) = (x, y) { cx+=dx; cy+=dy; path.line_to(to_font(cx,cy)); } }
-            'H' => { if let Some(x) = take_f64(&tokens, &mut i) { cx=x; path.line_to(to_font(cx,cy)); } }
-            'h' => { if let Some(dx) = take_f64(&tokens, &mut i) { cx+=dx; path.line_to(to_font(cx,cy)); } }
-            'V' => { if let Some(y) = take_f64(&tokens, &mut i) { cy=y; path.line_to(to_font(cx,cy)); } }
-            'v' => { if let Some(dy) = take_f64(&tokens, &mut i) { cy+=dy; path.line_to(to_font(cx,cy)); } }
-            'C' => {
-                let x1=take_f64(&tokens,&mut i); let y1=take_f64(&tokens,&mut i);
-                let x2=take_f64(&tokens,&mut i); let y2=take_f64(&tokens,&mut i);
-                let x =take_f64(&tokens,&mut i); let y =take_f64(&tokens,&mut i);
-                if let (Some(x1),Some(y1),Some(x2),Some(y2),Some(x),Some(y)) = (x1,y1,x2,y2,x,y) {
-                    path.curve_to(to_font(x1,y1),to_font(x2,y2),to_font(x,y)); cx=x; cy=y;
-                }
-            }
-            'c' => {
-                let dx1=take_f64(&tokens,&mut i); let dy1=take_f64(&tokens,&mut i);
-                let dx2=take_f64(&tokens,&mut i); let dy2=take_f64(&tokens,&mut i);
-                let dx =take_f64(&tokens,&mut i); let dy =take_f64(&tokens,&mut i);
-                if let (Some(dx1),Some(dy1),Some(dx2),Some(dy2),Some(dx),Some(dy)) = (dx1,dy1,dx2,dy2,dx,dy) {
-                    path.curve_to(to_font(cx+dx1,cy+dy1),to_font(cx+dx2,cy+dy2),to_font(cx+dx,cy+dy));
-                    cx+=dx; cy+=dy;
-                }
-            }
-            'Q' => {
-                let x1=take_f64(&tokens,&mut i); let y1=take_f64(&tokens,&mut i);
-                let x =take_f64(&tokens,&mut i); let y =take_f64(&tokens,&mut i);
-                if let (Some(x1),Some(y1),Some(x),Some(y)) = (x1,y1,x,y) {
-                    path.quad_to(to_font(x1,y1),to_font(x,y)); cx=x; cy=y;
-                }
-            }
-            'q' => {
-                let dx1=take_f64(&tokens,&mut i); let dy1=take_f64(&tokens,&mut i);
-                let dx =take_f64(&tokens,&mut i); let dy =take_f64(&tokens,&mut i);
-                if let (Some(dx1),Some(dy1),Some(dx),Some(dy)) = (dx1,dy1,dx,dy) {
-                    path.quad_to(to_font(cx+dx1,cy+dy1),to_font(cx+dx,cy+dy)); cx+=dx; cy+=dy;
-                }
-            }
-            _ => { i += 1; continue; }
-        }
-        if i == prev { i += 1; }
+        path.close_path();
     }
     path
 }
 
 // ─── Recombine ───────────────────────────────────────────────────────────────
+
+/// Returns the on-curve contour points for a single glyph, normalized to a
+/// 0–1000 × 0–1000 grid (y-down, same space as contours_to_bezpath expects).
+#[wasm_bindgen]
+pub fn get_glyph_contours(font_data: &[u8], char_code: u32) -> Result<JsValue, JsValue> {
+    let sfnt = to_sfnt(font_data).map_err(|e| JsValue::from_str(&e))?;
+    let font = FontRef::new(&sfnt).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let head = font.head().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let hhea = font.hhea().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let upem = head.units_per_em() as f64;
+    let ascender = hhea.ascender().to_i16() as f64;
+    let descender = hhea.descender().to_i16() as f64;
+    let em = (ascender - descender).max(1.0);
+    let sx = upem / 1000.0;
+    let to_norm = |pt: Point| -> [f64; 2] {
+        [(pt.x / sx).round(), ((ascender - pt.y) / em * 1000.0).round()]
+    };
+
+    let ch = char::from_u32(char_code).ok_or_else(|| JsValue::from_str("invalid char code"))?;
+    let gid = font.charmap().map(ch).ok_or_else(|| JsValue::from_str("glyph not found"))?;
+    let mut pen = CollectPen::new();
+    let ds = DrawSettings::unhinted(Size::new(upem as f32), LocationRef::default());
+    font.outline_glyphs()
+        .get(gid).ok_or_else(|| JsValue::from_str("no outline"))?
+        .draw(ds, &mut pen).map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+    let mut contours: Vec<Vec<[f64; 2]>> = Vec::new();
+    let mut current: Vec<[f64; 2]> = Vec::new();
+    for el in pen.path.elements() {
+        match el {
+            PathEl::MoveTo(pt) => {
+                if !current.is_empty() { contours.push(std::mem::take(&mut current)); }
+                current.push(to_norm(*pt));
+            }
+            PathEl::LineTo(pt) => current.push(to_norm(*pt)),
+            PathEl::QuadTo(_, pt) | PathEl::CurveTo(_, _, pt) => current.push(to_norm(*pt)),
+            PathEl::ClosePath => {
+                if !current.is_empty() { contours.push(std::mem::take(&mut current)); }
+            }
+        }
+    }
+    if !current.is_empty() { contours.push(current); }
+
+    serde_json::to_string(&contours)
+        .map(|s| JsValue::from_str(&s))
+        .map_err(|e| JsValue::from_str(&e.to_string()))
+}
 
 #[wasm_bindgen]
 pub fn recombine_fonts_with_paths(font1_data: &[u8], request_json: &str) -> Result<Vec<u8>, JsValue> {
@@ -1655,11 +1614,11 @@ fn recombine_internal(font_data: &[u8], req: RecombineRequest) -> Result<Vec<u8>
     let metrics = font.glyph_metrics(Size::new(upem as f32), LocationRef::default());
     let outlines = font.outline_glyphs();
 
-    let mut gid_to_path: HashMap<u32, String> = HashMap::new();
-    for (char_str, svg_path) in &req.char_paths {
+    let mut gid_to_contours: HashMap<u32, &Vec<Vec<[f64; 2]>>> = HashMap::new();
+    for (char_str, contours) in &req.char_paths {
         if let Some(ch) = char_str.chars().next() {
             if let Some(gid) = charmap.map(ch) {
-                gid_to_path.insert(gid.to_u32(), svg_path.clone());
+                gid_to_contours.insert(gid.to_u32(), contours);
             }
         }
     }
@@ -1671,8 +1630,8 @@ fn recombine_internal(font_data: &[u8], req: RecombineRequest) -> Result<Vec<u8>
         let gid = skrifa::GlyphId::new(gid_u16 as u32);
         let advance = metrics.advance_width(gid).unwrap_or(upem as f32 * 0.5).round() as u16;
 
-        let svg_glyph = gid_to_path.get(&(gid_u16 as u32)).and_then(|svg_path| {
-            let bez = parse_svg_path(svg_path, upem, ascender, descender);
+        let svg_glyph = gid_to_contours.get(&(gid_u16 as u32)).and_then(|contours| {
+            let bez = contours_to_bezpath(contours, upem, ascender, descender);
             let has_drawing = bez.elements().iter().any(|el| matches!(
                 el, PathEl::LineTo(_) | PathEl::QuadTo(_, _) | PathEl::CurveTo(_, _, _)
             ));

@@ -125,7 +125,7 @@ async function onRecombine() {
   aiError.value = null
   const char = recombineChar.value
   try {
-    const bytes = await recombineFonts(char, baseFontFamily.value, blendBaseFontFamily.value)
+    const bytes = await recombineFonts(char, baseFontFamily.value, blendBaseFontFamily.value, blendFontData.value!)
     if (bytes) {
       recombineStyledFontBytes.value = bytes
       fontCounter++

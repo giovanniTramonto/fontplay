@@ -10,7 +10,7 @@ export default async (req: Request) => {
     return new Response('Method not allowed', { status: 405 })
   }
 
-  const { char, image1, image2 } = await req.json()
+  const { char, image1, image2, font1Contours, font2Contours } = await req.json()
 
   if (!char || !image1 || !image2) {
     return new Response(JSON.stringify({ error: 'char, image1 and image2 are required.' }), {
@@ -50,7 +50,7 @@ export default async (req: Request) => {
           },
           {
             type: 'text',
-            text: `These are two renderings of the letter "${char}". Design a hybrid glyph combining elements from both.`,
+            text: `These are two renderings of the letter "${char}".\nfont1Contours: ${JSON.stringify(font1Contours ?? [])}\nfont2Contours: ${JSON.stringify(font2Contours ?? [])}\nDesign a hybrid glyph combining elements from both.`,
           },
         ],
       },
@@ -68,15 +68,10 @@ export default async (req: Request) => {
   }
 
   try {
-    const parsed = JSON.parse(match[0]) as { path?: unknown; reasoning?: string }
-    const rawPath = parsed.path
-    const path = typeof rawPath === 'string'
-      ? rawPath
-      : Array.isArray(rawPath)
-        ? (rawPath as string[]).join(' ')
-        : null
-    if (!path) throw new Error('missing path')
-    return new Response(JSON.stringify({ path, reasoning: parsed.reasoning ?? '' }), {
+    const parsed = JSON.parse(match[0]) as { contours?: unknown; reasoning?: string }
+    const contours = Array.isArray(parsed.contours) ? parsed.contours : null
+    if (!contours) throw new Error('missing contours')
+    return new Response(JSON.stringify({ contours, reasoning: parsed.reasoning ?? '' }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })

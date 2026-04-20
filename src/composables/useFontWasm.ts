@@ -198,18 +198,25 @@ export function useFontWasm() {
     char: string,
     font1Family: string,
     font2Family: string,
+    secondFontData: Uint8Array,
   ): Promise<Uint8Array | null> {
     if (!fontData.value || !fontInfo.value) return null
     const wasm = await loadWasm()
     const { unitsPerEm: upem, ascender, descender } = fontInfo.value
+    const charCode = char.codePointAt(0) ?? 65
 
-    const [image1, image2] = await Promise.all([
+    const [image1, image2, contours1Json, contours2Json] = await Promise.all([
       glyphToBase64Png(font1Family, char, upem, ascender, descender),
       glyphToBase64Png(font2Family, char, upem, ascender, descender),
+      Promise.resolve(wasm.get_glyph_contours(fontData.value, charCode) as string),
+      Promise.resolve(wasm.get_glyph_contours(secondFontData, charCode) as string),
     ])
 
-    const { path } = await askRecombineLLM(char, image1, image2)
-const request = JSON.stringify({ charPaths: { [char]: path } })
+    const font1Contours: number[][][] = JSON.parse(contours1Json)
+    const font2Contours: number[][][] = JSON.parse(contours2Json)
+
+    const { contours } = await askRecombineLLM(char, image1, image2, font1Contours, font2Contours)
+    const request = JSON.stringify({ charPaths: { [char]: contours } })
     const bytes: Uint8Array = wasm.recombine_fonts_with_paths(fontData.value, request)
     return bytes
   }
