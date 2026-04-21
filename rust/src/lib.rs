@@ -88,11 +88,6 @@ struct StyleFontRequest {
     mood: Option<String>,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RecombineRequest {
-    char_paths: HashMap<String, Vec<Vec<[f64; 2]>>>,
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1524,131 +1519,363 @@ fn build_palette(colr: &ColrInput) -> (Vec<ColorRecord>, u16, u16, u16, u16, u16
     (records, fill_idx, grad0_idx, grad1_idx, block_idx, shadow_idx, white_idx, outline_idx, grad2_idx)
 }
 
-// ─── SVG path parser ─────────────────────────────────────────────────────────
+// ─── Bezier horizontal clip ───────────────────────────────────────────────────
 
-fn contours_to_bezpath(contours: &[Vec<[f64; 2]>], upem: f64, ascender: f64, descender: f64) -> BezPath {
-    let sx = upem / 1000.0;
-    let em = (ascender - descender).max(1.0);
-    let to_font = |x: f64, y: f64| Point::new(x * sx, ascender - y / 1000.0 * em);
-    let mut path = BezPath::new();
-    for contour in contours {
-        if contour.is_empty() { continue; }
-        path.move_to(to_font(contour[0][0], contour[0][1]));
-        for pt in &contour[1..] {
-            path.line_to(to_font(pt[0], pt[1]));
-        }
-        path.close_path();
-    }
-    path
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SpliceParams {
+    cut1: f64,
+    cut2: f64,
+    zones: [String; 3],
 }
 
-// ─── Recombine ───────────────────────────────────────────────────────────────
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpliceRequest {
+    cut1: f64,
+    cut2: f64,
+    zones: [String; 3],
+    /// Optional per-character overrides keyed by single character string
+    #[serde(default)]
+    per_char: HashMap<String, SpliceParams>,
+}
 
-/// Returns the on-curve contour points for a single glyph, normalized to a
-/// 0–1000 × 0–1000 grid (y-down, same space as contours_to_bezpath expects).
-#[wasm_bindgen]
-pub fn get_glyph_contours(font_data: &[u8], char_code: u32) -> Result<JsValue, JsValue> {
-    let sfnt = to_sfnt(font_data).map_err(|e| JsValue::from_str(&e))?;
-    let font = FontRef::new(&sfnt).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let head = font.head().map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let hhea = font.hhea().map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let upem = head.units_per_em() as f64;
-    let ascender = hhea.ascender().to_i16() as f64;
-    let descender = hhea.descender().to_i16() as f64;
-    let em = (ascender - descender).max(1.0);
-    let sx = upem / 1000.0;
-    let to_norm = |pt: Point| -> [f64; 2] {
-        [(pt.x / sx).round(), ((ascender - pt.y) / em * 1000.0).round()]
-    };
+#[derive(Clone)]
+enum SegEl {
+    Line(Point, Point),
+    Quad(Point, Point, Point), // p0, ctrl, p1
+}
 
-    let ch = char::from_u32(char_code).ok_or_else(|| JsValue::from_str("invalid char code"))?;
-    let gid = font.charmap().map(ch).ok_or_else(|| JsValue::from_str("glyph not found"))?;
-    let mut pen = CollectPen::new();
-    let ds = DrawSettings::unhinted(Size::new(upem as f32), LocationRef::default());
-    font.outline_glyphs()
-        .get(gid).ok_or_else(|| JsValue::from_str("no outline"))?
-        .draw(ds, &mut pen).map_err(|e| JsValue::from_str(&e.to_string()))?;
-
-    let mut contours: Vec<Vec<[f64; 2]>> = Vec::new();
-    let mut current: Vec<[f64; 2]> = Vec::new();
-    for el in pen.path.elements() {
-        match el {
-            PathEl::MoveTo(pt) => {
-                if !current.is_empty() { contours.push(std::mem::take(&mut current)); }
-                current.push(to_norm(*pt));
+impl SegEl {
+    fn start(&self) -> Point {
+        match self { Self::Line(p, _) | Self::Quad(p, _, _) => *p }
+    }
+    fn end(&self) -> Point {
+        match self { Self::Line(_, p) | Self::Quad(_, _, p) => *p }
+    }
+    fn y_crossings(&self, y_cut: f64) -> Vec<f64> {
+        const EPS: f64 = 1e-9;
+        let in_range = |t: f64| t > EPS && t < 1.0 - EPS;
+        match self {
+            Self::Line(p0, p1) => {
+                let dy = p1.y - p0.y;
+                if dy.abs() < 1e-10 { return vec![]; }
+                let t = (y_cut - p0.y) / dy;
+                if in_range(t) { vec![t] } else { vec![] }
             }
-            PathEl::LineTo(pt) => current.push(to_norm(*pt)),
-            PathEl::QuadTo(_, pt) | PathEl::CurveTo(_, _, pt) => current.push(to_norm(*pt)),
-            PathEl::ClosePath => {
+            Self::Quad(p0, pc, p1) => {
+                let a = p0.y - 2.0 * pc.y + p1.y;
+                let b = 2.0 * (pc.y - p0.y);
+                let c = p0.y - y_cut;
+                let mut roots = Vec::new();
+                if a.abs() < 1e-10 {
+                    if b.abs() > 1e-10 {
+                        let t = -c / b;
+                        if in_range(t) { roots.push(t); }
+                    }
+                } else {
+                    let disc = b * b - 4.0 * a * c;
+                    if disc >= 0.0 {
+                        let sq = disc.sqrt();
+                        for &s in &[-1.0_f64, 1.0] {
+                            let t = (-b + s * sq) / (2.0 * a);
+                            if in_range(t) { roots.push(t); }
+                        }
+                    }
+                }
+                roots.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                roots
+            }
+        }
+    }
+    fn subsegment(&self, t0: f64, t1: f64) -> SegEl {
+        if t0 <= 1e-10 && t1 >= 1.0 - 1e-10 { return self.clone(); }
+        let after = if t0 > 1e-10 {
+            match self {
+                Self::Line(p0, p1) => Self::Line(lrp(*p0, *p1, t0), *p1),
+                Self::Quad(p0, pc, p1) => {
+                    let p01 = lrp(*p0, *pc, t0);
+                    let p12 = lrp(*pc, *p1, t0);
+                    Self::Quad(lrp(p01, p12, t0), p12, *p1)
+                }
+            }
+        } else { self.clone() };
+
+        if t1 < 1.0 - 1e-10 {
+            let tl = (t1 - t0) / (1.0 - t0);
+            match &after {
+                Self::Line(p0, p1) => Self::Line(*p0, lrp(*p0, *p1, tl)),
+                Self::Quad(p0, pc, p1) => {
+                    let p01 = lrp(*p0, *pc, tl);
+                    let p12 = lrp(*pc, *p1, tl);
+                    Self::Quad(*p0, p01, lrp(p01, p12, tl))
+                }
+            }
+        } else { after }
+    }
+    fn emit(&self, path: &mut BezPath) {
+        match self {
+            Self::Line(_, p1) => path.line_to(*p1),
+            Self::Quad(_, pc, p1) => path.quad_to(*pc, *p1),
+        }
+    }
+}
+
+#[inline]
+fn lrp(a: Point, b: Point, t: f64) -> Point {
+    Point::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y))
+}
+
+fn extract_contours(path: &BezPath) -> Vec<Vec<SegEl>> {
+    let mut contours: Vec<Vec<SegEl>> = Vec::new();
+    let mut current: Vec<SegEl> = Vec::new();
+    let mut cur = Point::ZERO;
+    let mut start = Point::ZERO;
+    for el in path.iter() {
+        match el {
+            PathEl::MoveTo(p) => {
                 if !current.is_empty() { contours.push(std::mem::take(&mut current)); }
+                cur = p; start = p;
+            }
+            PathEl::LineTo(p) => { current.push(SegEl::Line(cur, p)); cur = p; }
+            PathEl::QuadTo(pc, p) => { current.push(SegEl::Quad(cur, pc, p)); cur = p; }
+            PathEl::CurveTo(_, _, p) => { current.push(SegEl::Line(cur, p)); cur = p; }
+            PathEl::ClosePath => {
+                if (cur.x - start.x).abs() > 0.5 || (cur.y - start.y).abs() > 0.5 {
+                    current.push(SegEl::Line(cur, start));
+                }
+                if !current.is_empty() { contours.push(std::mem::take(&mut current)); }
+                cur = start;
             }
         }
     }
     if !current.is_empty() { contours.push(current); }
-
-    serde_json::to_string(&contours)
-        .map(|s| JsValue::from_str(&s))
-        .map_err(|e| JsValue::from_str(&e.to_string()))
+    contours
 }
+
+fn clip_contour_halfplane(segs: &[SegEl], y_cut: f64, keep_above: bool) -> Vec<BezPath> {
+    if segs.is_empty() { return vec![]; }
+    let in_zone = |y: f64| if keep_above { y > y_cut } else { y < y_cut };
+
+    let crossings: Vec<(usize, f64)> = segs.iter().enumerate()
+        .flat_map(|(i, s)| s.y_crossings(y_cut).into_iter().map(move |t| (i, t)))
+        .collect();
+
+    let initially_in = in_zone(segs[0].start().y);
+
+    if crossings.is_empty() {
+        if initially_in {
+            let mut p = BezPath::new();
+            p.move_to(segs[0].start());
+            for seg in segs { seg.emit(&mut p); }
+            p.close_path();
+            return vec![p];
+        }
+        return vec![];
+    }
+
+    let mut arcs: Vec<Vec<SegEl>> = Vec::new();
+    let mut current_arc: Vec<SegEl> = Vec::new();
+    let mut in_zone_now = initially_in;
+    let mut cx_iter = crossings.iter().peekable();
+
+    for (seg_idx, seg) in segs.iter().enumerate() {
+        let mut this_ts: Vec<f64> = Vec::new();
+        while cx_iter.peek().map(|(i, _)| *i == seg_idx).unwrap_or(false) {
+            this_ts.push(cx_iter.next().unwrap().1);
+        }
+        let mut breakpoints = this_ts.clone();
+        breakpoints.push(1.0);
+        let mut t_prev = 0.0_f64;
+
+        for &t_end in &breakpoints {
+            if t_end - t_prev < 1e-10 { t_prev = t_end; continue; }
+            let subseg = seg.subsegment(t_prev, t_end);
+            if in_zone_now {
+                current_arc.push(subseg);
+            }
+            let is_crossing = t_end < 1.0 - 1e-10;
+            if is_crossing {
+                in_zone_now = !in_zone_now;
+                if !in_zone_now && !current_arc.is_empty() {
+                    arcs.push(std::mem::take(&mut current_arc));
+                }
+            }
+            t_prev = t_end;
+        }
+    }
+    if !current_arc.is_empty() { arcs.push(current_arc); }
+    if arcs.is_empty() { return vec![]; }
+
+    // Wrap-around: started in-zone → last arc + first arc are one arc split at boundary
+    if initially_in && arcs.len() > 1 {
+        let last = arcs.pop().unwrap();
+        let first = arcs.remove(0);
+        arcs.insert(0, last.into_iter().chain(first).collect());
+    }
+
+    arcs.into_iter().filter_map(|arc| {
+        if arc.is_empty() { return None; }
+        let arc_start = arc[0].start();
+        let arc_end = arc.last().unwrap().end();
+        let mut p = BezPath::new();
+        p.move_to(arc_start);
+        for seg in &arc { seg.emit(&mut p); }
+        if (arc_end.x - arc_start.x).abs() > 0.5 {
+            p.line_to(Point::new(arc_start.x, y_cut));
+        }
+        p.close_path();
+        Some(p)
+    }).collect()
+}
+
+fn clip_path_halfplane(path: &BezPath, y_cut: f64, keep_above: bool) -> BezPath {
+    let quad = cubics_to_quads(path);
+    let mut result = BezPath::new();
+    for contour in extract_contours(&quad) {
+        for clipped in clip_contour_halfplane(&contour, y_cut, keep_above) {
+            result.extend(clipped.iter());
+        }
+    }
+    result
+}
+
+fn scale_path(path: &BezPath, scale: f64) -> BezPath {
+    let mut out = BezPath::new();
+    for el in path.iter() {
+        let s = |p: Point| Point::new(p.x * scale, p.y * scale);
+        match el {
+            PathEl::MoveTo(p) => out.move_to(s(p)),
+            PathEl::LineTo(p) => out.line_to(s(p)),
+            PathEl::QuadTo(pc, p) => out.quad_to(s(pc), s(p)),
+            PathEl::CurveTo(p1, p2, p3) => out.curve_to(s(p1), s(p2), s(p3)),
+            PathEl::ClosePath => out.close_path(),
+        }
+    }
+    out
+}
+
+// ─── splice_fonts_at_cuts ────────────────────────────────────────────────────
 
 #[wasm_bindgen]
-pub fn recombine_fonts_with_paths(font1_data: &[u8], request_json: &str) -> Result<Vec<u8>, JsValue> {
-    let sfnt = to_sfnt(font1_data).map_err(|e| JsValue::from_str(&e))?;
-    let req: RecombineRequest = serde_json::from_str(request_json)
+pub fn splice_fonts_at_cuts(
+    font1_data: &[u8],
+    font2_data: &[u8],
+    request_json: &str,
+) -> Result<Vec<u8>, JsValue> {
+    let sfnt1 = to_sfnt(font1_data).map_err(|e| JsValue::from_str(&e))?;
+    let sfnt2 = to_sfnt(font2_data).map_err(|e| JsValue::from_str(&e))?;
+    let req: SpliceRequest = serde_json::from_str(request_json)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    recombine_internal(&sfnt, req).map_err(|e| JsValue::from_str(&e))
+    splice_fonts_internal(&sfnt1, &sfnt2, req).map_err(|e| JsValue::from_str(&e))
 }
 
-fn recombine_internal(font_data: &[u8], req: RecombineRequest) -> Result<Vec<u8>, String> {
-    let font = FontRef::new(font_data).map_err(|e| e.to_string())?;
-    let head = font.head().map_err(|e| e.to_string())?;
-    let hhea = font.hhea().map_err(|e| e.to_string())?;
-    let upem = head.units_per_em() as f64;
-    let ascender = hhea.ascender().to_i16() as f64;
-    let descender = hhea.descender().to_i16() as f64;
-    let glyph_count = font.maxp().map_err(|e| e.to_string())?.num_glyphs();
+fn splice_fonts_internal(font1_data: &[u8], font2_data: &[u8], req: SpliceRequest) -> Result<Vec<u8>, String> {
+    let font1 = FontRef::new(font1_data).map_err(|e| e.to_string())?;
+    let font2 = FontRef::new(font2_data).map_err(|e| e.to_string())?;
 
-    let charmap = font.charmap();
-    let metrics = font.glyph_metrics(Size::new(upem as f32), LocationRef::default());
-    let outlines = font.outline_glyphs();
+    let head1 = font1.head().map_err(|e| e.to_string())?;
+    let hhea1 = font1.hhea().map_err(|e| e.to_string())?;
+    let upem1 = head1.units_per_em() as f64;
+    let ascender1 = hhea1.ascender().to_i16() as f64;
+    let descender1 = hhea1.descender().to_i16() as f64;
+    let em1 = (ascender1 - descender1).max(1.0);
 
-    let mut gid_to_contours: HashMap<u32, &Vec<Vec<[f64; 2]>>> = HashMap::new();
-    for (char_str, contours) in &req.char_paths {
+    let head2 = font2.head().map_err(|e| e.to_string())?;
+    let upem2 = head2.units_per_em() as f64;
+    let scale2 = upem1 / upem2.max(1.0);
+
+    let glyph_count = font1.maxp().map_err(|e| e.to_string())?.num_glyphs();
+    let charmap1 = font1.charmap();
+    let charmap2 = font2.charmap();
+    let metrics1 = font1.glyph_metrics(Size::new(upem1 as f32), LocationRef::default());
+    let outlines1 = font1.outline_glyphs();
+    let outlines2 = font2.outline_glyphs();
+
+    // Map font1 glyph IDs to font2 glyph IDs via shared unicode codepoints
+    let mut gid1_to_gid2: HashMap<u32, u32> = HashMap::new();
+    let mut iter2 = charmap2.mappings();
+    while let Some((cp, gid2)) = iter2.next() {
+        if let Some(gid1) = charmap1.map(char::from_u32(cp).unwrap_or('\0')) {
+            gid1_to_gid2.entry(gid1.to_u32()).or_insert(gid2.to_u32());
+        }
+    }
+
+    // Build gid → per-char SpliceParams override map
+    let mut gid_to_params: HashMap<u32, SpliceParams> = HashMap::new();
+    for (char_str, params) in &req.per_char {
         if let Some(ch) = char_str.chars().next() {
-            if let Some(gid) = charmap.map(ch) {
-                gid_to_contours.insert(gid.to_u32(), contours);
+            if let Some(gid1) = charmap1.map(ch) {
+                gid_to_params.insert(gid1.to_u32(), params.clone());
             }
         }
     }
+
+    // Helper: convert normalized cut to font1 y-up coordinate
+    let to_y = |norm: f64| ascender1 - (norm.clamp(0.0, 1000.0) / 1000.0) * em1;
 
     let mut glyf_builder = GlyfLocaBuilder::new();
     let mut h_metrics: Vec<LongMetric> = Vec::with_capacity(glyph_count as usize);
 
     for gid_u16 in 0..glyph_count {
-        let gid = skrifa::GlyphId::new(gid_u16 as u32);
-        let advance = metrics.advance_width(gid).unwrap_or(upem as f32 * 0.5).round() as u16;
+        let gid1 = skrifa::GlyphId::new(gid_u16 as u32);
+        let advance = metrics1.advance_width(gid1).unwrap_or(upem1 as f32 * 0.5).round() as u16;
 
-        let svg_glyph = gid_to_contours.get(&(gid_u16 as u32)).and_then(|contours| {
-            let bez = contours_to_bezpath(contours, upem, ascender, descender);
-            let has_drawing = bez.elements().iter().any(|el| matches!(
-                el, PathEl::LineTo(_) | PathEl::QuadTo(_, _) | PathEl::CurveTo(_, _, _)
-            ));
-            if !has_drawing { return None; }
-            let quad = cubics_to_quads(&bez);
-            SimpleGlyph::from_bezpath(&quad).ok().map(WriteGlyph::from)
+        // Resolve splice params for this glyph (per-char override or default)
+        let (y_high, y_low, zones) = {
+            let p = gid_to_params.get(&(gid_u16 as u32));
+            let (c1, c2, z) = match p {
+                Some(ov) => (ov.cut1, ov.cut2, &ov.zones),
+                None => (req.cut1, req.cut2, &req.zones),
+            };
+            let yh = to_y(c1).max(to_y(c2));
+            let yl = to_y(c1).min(to_y(c2));
+            (yh, yl, z.clone())
+        };
+
+        let font1_path: Option<BezPath> = outlines1.get(gid1).and_then(|g| {
+            let mut pen = CollectPen::new();
+            let ds = DrawSettings::unhinted(Size::new(upem1 as f32), LocationRef::default());
+            g.draw(ds, &mut pen).ok()?;
+            if pen.path.is_empty() { None } else { Some(pen.path) }
         });
 
-        let mut pen = CollectPen::new();
-        let ds = DrawSettings::unhinted(Size::new(upem as f32), LocationRef::default());
-        let font1_glyph = outlines.get(gid).and_then(|g| g.draw(ds, &mut pen).ok()).and_then(|_| {
-            if pen.path.is_empty() { return None; }
-            let quad = cubics_to_quads(&pen.path);
-            SimpleGlyph::from_bezpath(&quad).ok().map(WriteGlyph::from)
+        let font2_path: Option<BezPath> = gid1_to_gid2.get(&(gid_u16 as u32)).and_then(|&gid2_u32| {
+            let gid2 = skrifa::GlyphId::new(gid2_u32);
+            let mut pen = CollectPen::new();
+            let ds = DrawSettings::unhinted(Size::new(upem2 as f32), LocationRef::default());
+            outlines2.get(gid2)?.draw(ds, &mut pen).ok()?;
+            if pen.path.is_empty() { None } else { Some(scale_path(&pen.path, scale2)) }
         });
 
-        let g = svg_glyph.or(font1_glyph).unwrap_or(WriteGlyph::Empty);
-        let lsb = match &g { WriteGlyph::Simple(sg) => sg.bbox.x_min, _ => 0 };
-        glyf_builder.add_glyph(&g).map_err(|e| e.to_string())?;
+        let top_src = if zones[0] == "font2" { &font2_path } else { &font1_path };
+        let mid_src = if zones[1] == "font2" { &font2_path } else { &font1_path };
+        let bot_src = if zones[2] == "font2" { &font2_path } else { &font1_path };
+
+        let top_clipped = top_src.as_ref().map(|p| clip_path_halfplane(p, y_high, true));
+        let bot_clipped = bot_src.as_ref().map(|p| clip_path_halfplane(p, y_low, false));
+        let mid_clipped = mid_src.as_ref().map(|p| {
+            let below_high = clip_path_halfplane(p, y_high, false);
+            clip_path_halfplane(&below_high, y_low, true)
+        });
+
+        let mut combined = BezPath::new();
+        for zone in [&top_clipped, &mid_clipped, &bot_clipped].iter() {
+            if let Some(z) = zone { combined.extend(z.iter()); }
+        }
+
+        let glyph = if combined.is_empty() {
+            font1_path.as_ref().and_then(|p| {
+                let q = cubics_to_quads(p);
+                SimpleGlyph::from_bezpath(&q).ok().map(WriteGlyph::from)
+            }).unwrap_or(WriteGlyph::Empty)
+        } else {
+            let q = cubics_to_quads(&combined);
+            SimpleGlyph::from_bezpath(&q).ok().map(WriteGlyph::from).unwrap_or(WriteGlyph::Empty)
+        };
+
+        let lsb = match &glyph { WriteGlyph::Simple(sg) => sg.bbox.x_min, _ => 0 };
+        glyf_builder.add_glyph(&glyph).map_err(|e| e.to_string())?;
         h_metrics.push(LongMetric { advance, side_bearing: lsb });
     }
 
@@ -1657,7 +1884,7 @@ fn recombine_internal(font_data: &[u8], req: RecombineRequest) -> Result<Vec<u8>
     let new_loca_bytes = dump_table(&new_loca).map_err(|e| e.to_string())?;
     let hmtx = Hmtx::new(h_metrics, vec![]);
 
-    let mut head_bytes = font.table_data(ReadTag::new(b"head")).ok_or("no head")?.as_bytes().to_vec();
+    let mut head_bytes = font1.table_data(ReadTag::new(b"head")).ok_or("no head")?.as_bytes().to_vec();
     let loca_fmt_val: u16 = match loca_format {
         write_fonts::tables::loca::LocaFormat::Long => 1,
         write_fonts::tables::loca::LocaFormat::Short => 0,
@@ -1666,13 +1893,13 @@ fn recombine_internal(font_data: &[u8], req: RecombineRequest) -> Result<Vec<u8>
     patch_u16(&mut head_bytes, 8, 0);
     patch_u16(&mut head_bytes, 10, 0);
 
-    let mut hhea_bytes = font.table_data(ReadTag::new(b"hhea")).ok_or("no hhea")?.as_bytes().to_vec();
+    let mut hhea_bytes = font1.table_data(ReadTag::new(b"hhea")).ok_or("no hhea")?.as_bytes().to_vec();
     patch_u16(&mut hhea_bytes, 34, glyph_count);
 
     let empty_colr = ColrInput::default();
     let (colr, cpal) = build_colr_cpal(
         glyph_count, &empty_colr,
-        head.units_per_em(), hhea.ascender().to_i16(), hhea.descender().to_i16(),
+        head1.units_per_em(), hhea1.ascender().to_i16(), hhea1.descender().to_i16(),
     );
     let maxp = Maxp {
         num_glyphs: glyph_count,
@@ -1683,8 +1910,8 @@ fn recombine_internal(font_data: &[u8], req: RecombineRequest) -> Result<Vec<u8>
         max_stack_elements: Some(0), max_size_of_instructions: Some(0),
         max_component_elements: Some(0), max_component_depth: Some(0),
     };
-    let name_bytes = font.table_data(ReadTag::new(b"name"))
-        .map(|d| patch_name_table(d.as_bytes(), "Recombine"))
+    let name_bytes = font1.table_data(ReadTag::new(b"name"))
+        .map(|d| patch_name_table(d.as_bytes(), "Splice"))
         .unwrap_or_default();
 
     let skip: &[[u8; 4]] = &[
@@ -1693,7 +1920,7 @@ fn recombine_internal(font_data: &[u8], req: RecombineRequest) -> Result<Vec<u8>
         *b"CFF ", *b"CFF2", *b"HVAR", *b"VVAR", *b"MVAR", *b"STAT", *b"fvar", *b"gvar",
     ];
     let mut builder = FontBuilder::new();
-    copy_tables_except(&mut builder, font_data, &font, skip);
+    copy_tables_except(&mut builder, font1_data, &font1, skip);
     builder.add_raw(Tag::new(b"name"), name_bytes);
     builder.add_raw(Tag::new(b"glyf"), new_glyf_bytes);
     builder.add_raw(Tag::new(b"loca"), new_loca_bytes);

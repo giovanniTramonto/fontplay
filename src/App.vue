@@ -5,9 +5,10 @@ import BlendButtons from '@/components/BlendButtons.vue'
 import FontBar from '@/components/FontBar.vue'
 import FontUpload from '@/components/FontUpload.vue'
 import GlyphDisplay from '@/components/GlyphDisplay.vue'
+import SpliceButtons from '@/components/SpliceButtons.vue'
 import StyleButtons from '@/components/StyleButtons.vue'
 import { useFontWasm } from '@/composables/useFontWasm'
-import { askLLM } from '@/composables/useLLM'
+import { askLLM, askSpliceLLM } from '@/composables/useLLM'
 
 const {
   fontData,
@@ -17,7 +18,7 @@ const {
   loadFont,
   styleFont,
   blendFontsSdfCanvas,
-  recombineFonts,
+  spliceFontsAtCuts,
   resetFont,
 } = useFontWasm()
 
@@ -37,7 +38,7 @@ const fontName = ref<string | null>(null)
 // Styled font bytes — null means use original font
 const styledFontBytes = ref<Uint8Array | null>(null)
 const isColrEnabled = ref(true)
-const activeTab = ref<'style' | 'blend' | 'recombine'>('style')
+const activeTab = ref<'style' | 'blend' | 'splice'>('style')
 
 const blendFontName = ref<string | null>(null)
 const blendFactor = ref(0.5)
@@ -45,9 +46,9 @@ const blendStyledFontBytes = ref<Uint8Array | null>(null)
 const blendStyledFontFamily = ref<string | null>(null)
 const blendBaseFontFamily = ref<string | null>(null)
 
-const recombineChar = computed(() => [...text.value.trim()][0] ?? 'A')
-const recombineStyledFontBytes = ref<Uint8Array | null>(null)
-const recombineStyledFontFamily = ref<string | null>(null)
+const spliceActiveIntensity = ref<'low' | 'medium' | 'high' | null>(null)
+const spliceStyledFontBytes = ref<Uint8Array | null>(null)
+const spliceStyledFontFamily = ref<string | null>(null)
 
 // Unique CSS font-family name, incremented on each font upload to avoid cache issues
 let fontCounter = 0
@@ -55,20 +56,18 @@ const baseFontFamily = ref<string | null>(null)
 const styledFontFamily = ref<string | null>(null)
 
 const resultFontFamily = computed(
-  () => styledFontFamily.value ?? blendStyledFontFamily.value ?? recombineStyledFontFamily.value ?? null,
+  () => styledFontFamily.value ?? blendStyledFontFamily.value ?? spliceStyledFontFamily.value ?? null,
 )
-const resultText = computed(
-  () => activeTab.value === 'recombine' && recombineStyledFontFamily.value ? recombineChar.value : text.value,
-)
+const resultText = computed(() => text.value)
 
-const activeDownloadBytes = computed(() => styledFontBytes.value ?? blendStyledFontBytes.value ?? recombineStyledFontBytes.value)
+const activeDownloadBytes = computed(() => styledFontBytes.value ?? blendStyledFontBytes.value ?? spliceStyledFontBytes.value)
 const activeDownloadName = computed(() => {
   if (styledFontBytes.value)
     return `${fontName.value ?? 'fontplay'}-${activeProperty.value ?? 'styled'}`
   if (blendStyledFontBytes.value)
     return `${fontName.value ?? 'font1'}-x-${blendFontName.value ?? 'font2'}-blend`
-  if (recombineStyledFontBytes.value)
-    return `${fontName.value ?? 'font1'}-x-${blendFontName.value ?? 'font2'}-recombine-${recombineChar.value}`
+  if (spliceStyledFontBytes.value)
+    return `${fontName.value ?? 'font1'}-x-${blendFontName.value ?? 'font2'}-splice`
   return null
 })
 
@@ -112,25 +111,34 @@ function onRemoveFont() {
   activeProperty.value = null
   blendStyledFontBytes.value = null
   blendStyledFontFamily.value = null
+  spliceStyledFontBytes.value = null
+  spliceStyledFontFamily.value = null
+  spliceActiveIntensity.value = null
   aiError.value = null
 }
 
-async function onRecombine() {
-  if (!baseFontFamily.value || !blendBaseFontFamily.value) return
+async function onSplice(intensity: 'low' | 'medium' | 'high') {
+  if (!blendFontData.value) return
+  styledFontBytes.value = null
+  styledFontFamily.value = null
+  blendStyledFontBytes.value = null
+  blendStyledFontFamily.value = null
   isAiLoading.value = true
   aiError.value = null
-  const char = recombineChar.value
+  spliceActiveIntensity.value = intensity
   try {
-    const bytes = await recombineFonts(char, baseFontFamily.value, blendBaseFontFamily.value, blendFontData.value!)
+    const spliceResult = await askSpliceLLM(intensity)
+    const bytes = await spliceFontsAtCuts(blendFontData.value, spliceResult)
     if (bytes) {
-      recombineStyledFontBytes.value = bytes
+      spliceStyledFontBytes.value = bytes
       fontCounter++
-      const family = `fontplay-recombine-${fontCounter}`
-      recombineStyledFontFamily.value = family
+      const family = `fontplay-splice-${fontCounter}`
+      spliceStyledFontFamily.value = family
       injectFontFace(family, bytes)
     }
   } catch (e) {
     aiError.value = e instanceof Error ? e.message : String(e)
+    spliceActiveIntensity.value = null
   } finally {
     isAiLoading.value = false
   }
@@ -142,6 +150,8 @@ function onRemoveBlendFont() {
   blendStyledFontBytes.value = null
   blendStyledFontFamily.value = null
   blendBaseFontFamily.value = null
+  spliceStyledFontBytes.value = null
+  spliceStyledFontFamily.value = null
 }
 
 async function onBlendUpload(file: File) {
@@ -150,6 +160,8 @@ async function onBlendUpload(file: File) {
   blendStyledFontBytes.value = null
   blendStyledFontFamily.value = null
   blendBaseFontFamily.value = null
+  spliceStyledFontBytes.value = null
+  spliceStyledFontFamily.value = null
   styledFontBytes.value = null
   styledFontFamily.value = null
   activeProperty.value = null
@@ -164,6 +176,10 @@ async function onBlendUpload(file: File) {
 
 async function onBlend() {
   if (!blendFontData.value || !baseFontFamily.value || !blendBaseFontFamily.value) return
+  styledFontBytes.value = null
+  styledFontFamily.value = null
+  spliceStyledFontBytes.value = null
+  spliceStyledFontFamily.value = null
   isAiLoading.value = true
   aiError.value = null
   await new Promise((r) => setTimeout(r, 0))
@@ -266,14 +282,16 @@ function downloadFont() {
           @click="activeTab = 'style'">Style</button>
         <button role="tab" :aria-selected="activeTab === 'blend'" :class="['btn', { active: activeTab === 'blend' }]"
           @click="activeTab = 'blend'">Blend</button>
-        <button role="tab" :aria-selected="activeTab === 'recombine'"
-          :class="['btn', { active: activeTab === 'recombine' }]" @click="activeTab = 'recombine'">Recombine</button>
+        <button role="tab" :aria-selected="activeTab === 'splice'"
+          :class="['btn', { active: activeTab === 'splice' }]" @click="activeTab = 'splice'">Splice</button>
       </div>
       <div class="container">
         <StyleButtons v-if="activeTab === 'style'" :isLoading="isAiLoading" :activeProperty="activeProperty"
           v-model:isColrEnabled="isColrEnabled" @style="onStyle" />
         <BlendButtons v-else-if="activeTab === 'blend'" :secondFontInfo="secondFontInfo"
           v-model:blendFactor="blendFactor" />
+        <SpliceButtons v-else-if="activeTab === 'splice'" :secondFontInfo="secondFontInfo"
+          :isLoading="isAiLoading" :activeIntensity="spliceActiveIntensity" @splice="onSplice" />
       </div>
       <template v-if="activeTab !== 'style'">
         <template v-if="!secondFontInfo">
@@ -289,13 +307,11 @@ function downloadFont() {
             <GlyphDisplay v-model="text" :fontFamily="blendBaseFontFamily" />
           </div>
         </template>
-        <div class="container">
-          <button class="btn" :disabled="!secondFontInfo || isAiLoading"
-            @click="activeTab === 'blend' ? onBlend() : onRecombine()">Play</button>
+        <div v-if="activeTab === 'blend'" class="container">
+          <button class="btn" :disabled="!secondFontInfo || isAiLoading" @click="onBlend()">Play</button>
         </div>
       </template>
-      <p v-if="isAiLoading" aria-live="polite" class="loading">{{ activeTab === 'blend' ? 'Blending…' : activeTab ===
-        'recombine' ? 'Recombining…' : 'Generating…' }}</p>
+      <p v-if="isAiLoading" aria-live="polite" class="loading">{{ activeTab === 'style' ? 'Generating…' : activeTab === 'blend' ? 'Blending…' : 'Splicing…' }}</p>
       <p v-else-if="aiError" role="alert" class="error">{{ aiError }}</p>
     </section>
 

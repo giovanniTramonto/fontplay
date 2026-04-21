@@ -1,8 +1,9 @@
 import { makeBlendPrompt } from '#shared/prompts/blendPrompt'
-import { RECOMBINE_PROMPT } from '#shared/prompts/recombinePrompt'
+import { SPLICE_SYSTEM_PROMPT } from '#shared/prompts/splicePrompt'
 import { SYSTEM_PROMPT } from '#shared/prompts/systemPrompt'
 import type { ColrConfig, Transform } from '#shared/types'
-import { extractBlendResult, extractResult } from '#shared/utils/parseLLMResult'
+import { extractBlendResult, extractResult, extractSpliceResult } from '#shared/utils/parseLLMResult'
+import type { SpliceLLMResult } from '#shared/utils/parseLLMResult'
 
 interface OllamaResponse {
   message: { content: string }
@@ -15,11 +16,6 @@ export interface StyleResult {
 
 export interface BlendResult {
   blendFactor: number
-}
-
-export interface RecombineResult {
-  contours: number[][][]
-  reasoning?: string
 }
 
 function getSessionId(): string {
@@ -36,75 +32,42 @@ export async function askLLM(property: string): Promise<StyleResult> {
   return askNetlify(property)
 }
 
-
-export async function askRecombineLLM(char: string, image1: string, image2: string, font1Contours: number[][][], font2Contours: number[][][]): Promise<RecombineResult> {
-  if (import.meta.env.VITE_OLLAMA_URL) return askRecombineOllama(char, image1, image2, font1Contours, font2Contours)
-  return askRecombineNetlify(char, image1, image2, font1Contours, font2Contours)
+export async function askSpliceLLM(intensity: 'low' | 'medium' | 'high'): Promise<SpliceLLMResult> {
+  if (import.meta.env.VITE_OLLAMA_URL) return askSpliceOllama(intensity)
+  return askSpliceNetlify(intensity)
 }
 
-async function askRecombineNetlify(char: string, image1: string, image2: string, font1Contours: number[][][], font2Contours: number[][][]): Promise<RecombineResult> {
-  const res = await fetch('/api/recombine', {
+async function askSpliceNetlify(intensity: 'low' | 'medium' | 'high'): Promise<SpliceLLMResult> {
+  const res = await fetch('/api/splice', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Session-Id': getSessionId() },
-    body: JSON.stringify({ char, image1, image2, font1Contours, font2Contours }),
+    body: JSON.stringify({ intensity }),
   })
   if (!res.ok) {
     const data = await res.json().catch(() => null)
     throw new Error(data?.error ?? `API error: ${res.status} ${res.statusText}`)
   }
-  const data = await res.json()
-  if (data.error) throw new Error(data.error)
-  return { contours: data.contours, reasoning: data.reasoning }
+  return res.json()
 }
 
-function isPoint(v: unknown): v is number[] {
-  return Array.isArray(v) && v.length === 2 && typeof v[0] === 'number' && typeof v[1] === 'number'
-}
-
-function normalizeContours(raw: unknown): number[][][] | null {
-  if (!Array.isArray(raw) || raw.length === 0) return null
-  // Correct shape: array of contours
-  if (raw.every((c) => Array.isArray(c) && c.every(isPoint))) return raw as number[][][]
-  // Flat single contour: [[x,y],[x,y],...] → [[[x,y],...]]
-  if (raw.every(isPoint)) return [raw as number[][]]
-  return null
-}
-
-async function askRecombineOllama(char: string, image1: string, image2: string, font1Contours: number[][][], font2Contours: number[][][]): Promise<RecombineResult> {
-  const contourText = `font1Contours: ${JSON.stringify(font1Contours)}\nfont2Contours: ${JSON.stringify(font2Contours)}`
-  const response = await fetch(import.meta.env.VITE_OLLAMA_URL as string, {
+async function askSpliceOllama(intensity: 'low' | 'medium' | 'high'): Promise<SpliceLLMResult> {
+  const res = await fetch(import.meta.env.VITE_OLLAMA_URL as string, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: import.meta.env.VITE_OLLAMA_MODEL ?? 'qwen2.5-coder',
+      model: import.meta.env.VITE_OLLAMA_MODEL,
       stream: false,
       messages: [
-        {
-          role: 'user',
-          content: `${RECOMBINE_PROMPT}\n\nThese are two renderings of the letter "${char}". ${contourText}\nDesign a hybrid glyph combining elements from both.`,
-          images: [image1, image2],
-        },
+        { role: 'system', content: SPLICE_SYSTEM_PROMPT },
+        { role: 'user', content: `intensity: ${intensity}` },
       ],
     }),
   })
-  if (!response.ok) throw new Error(`Ollama error: ${response.status} ${response.statusText}`)
-  const data: OllamaResponse = await response.json()
-  const raw = data.message.content
-  const cleaned = raw.replace(/```[\w]*\n?/g, '').replace(/```/g, '').trim()
-
-  const jsonMatch = cleaned.match(/\{[\s\S]*\}/)
-  if (jsonMatch) {
-    try {
-      const parsed = JSON.parse(jsonMatch[0]) as { contours?: unknown; reasoning?: string }
-      const contours = normalizeContours(parsed.contours)
-      if (contours) return { contours, reasoning: parsed.reasoning }
-    } catch {
-      // fall through
-    }
-  }
-
-  throw new Error(`No contours in Ollama response: "${raw.slice(0, 120)}…"`)
+  if (!res.ok) throw new Error(`Ollama error: ${res.status}`)
+  const data = (await res.json()) as OllamaResponse
+  return extractSpliceResult(data.message.content)
 }
+
 
 export async function askBlendLLM(
   font1Name: string,

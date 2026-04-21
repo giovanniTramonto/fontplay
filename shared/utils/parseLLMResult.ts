@@ -75,6 +75,57 @@ function parseColr(raw: unknown): ColrConfig {
   }
 }
 
+export interface SpliceCharParams {
+  cut1: number
+  cut2: number
+  zones: ['font1' | 'font2', 'font1' | 'font2', 'font1' | 'font2']
+}
+
+export interface SpliceLLMResult {
+  default: SpliceCharParams
+  perChar: Record<string, SpliceCharParams>
+}
+
+const FALLBACK_SPLICE: SpliceLLMResult = {
+  default: { cut1: 333, cut2: 667, zones: ['font1', 'font2', 'font1'] },
+  perChar: {},
+}
+
+function isZone(v: unknown): v is 'font1' | 'font2' {
+  return v === 'font1' || v === 'font2'
+}
+
+function parseSpliceParams(raw: unknown): SpliceCharParams | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  const cut1 = typeof r.cut1 === 'number' ? Math.round(r.cut1) : null
+  const cut2 = typeof r.cut2 === 'number' ? Math.round(r.cut2) : null
+  const zones = Array.isArray(r.zones) && r.zones.length === 3 && r.zones.every(isZone)
+    ? (r.zones as ['font1' | 'font2', 'font1' | 'font2', 'font1' | 'font2'])
+    : null
+  if (cut1 === null || cut2 === null || !zones) return null
+  return { cut1: Math.max(0, Math.min(1000, cut1)), cut2: Math.max(0, Math.min(1000, cut2)), zones }
+}
+
+export function extractSpliceResult(raw: string): SpliceLLMResult {
+  const match = raw.match(/\{[\s\S]*\}/)
+  if (!match) return FALLBACK_SPLICE
+  try {
+    const parsed = JSON.parse(match[0]) as Record<string, unknown>
+    const defaultParams = parseSpliceParams(parsed.default) ?? FALLBACK_SPLICE.default
+    const perChar: Record<string, SpliceCharParams> = {}
+    if (parsed.perChar && typeof parsed.perChar === 'object') {
+      for (const [ch, val] of Object.entries(parsed.perChar as Record<string, unknown>)) {
+        const p = parseSpliceParams(val)
+        if (p && ch.length === 1) perChar[ch] = p
+      }
+    }
+    return { default: defaultParams, perChar }
+  } catch {
+    return FALLBACK_SPLICE
+  }
+}
+
 function isGradientColors(v: unknown): v is [string, string] | [string, string, string] {
   return Array.isArray(v) && (v.length === 2 || v.length === 3) && v.every((c) => typeof c === 'string')
 }
