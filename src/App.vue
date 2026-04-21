@@ -4,7 +4,6 @@ import { DEFAULT_TEXT } from '#shared/constants'
 import BlendButtons from '@/components/BlendButtons.vue'
 import FontBar from '@/components/FontBar.vue'
 import FontUpload from '@/components/FontUpload.vue'
-import RecombineButtons from '@/components/RecombineButtons.vue'
 import GlyphDisplay from '@/components/GlyphDisplay.vue'
 import StyleButtons from '@/components/StyleButtons.vue'
 import { useFontWasm } from '@/composables/useFontWasm'
@@ -24,7 +23,7 @@ const {
 
 const {
   fontData: blendFontData,
-  fontInfo: blendFontInfo,
+  fontInfo: secondFontInfo,
   loadFont: loadBlendFont,
   resetFont: resetBlendFont,
 } = useFontWasm()
@@ -55,9 +54,11 @@ let fontCounter = 0
 const baseFontFamily = ref<string | null>(null)
 const styledFontFamily = ref<string | null>(null)
 
-// The generated result font-family (null when no result exists yet)
 const resultFontFamily = computed(
   () => styledFontFamily.value ?? blendStyledFontFamily.value ?? recombineStyledFontFamily.value ?? null,
+)
+const resultText = computed(
+  () => activeTab.value === 'recombine' && recombineStyledFontFamily.value ? recombineChar.value : text.value,
 )
 
 const activeDownloadBytes = computed(() => styledFontBytes.value ?? blendStyledFontBytes.value ?? recombineStyledFontBytes.value)
@@ -256,8 +257,7 @@ function downloadFont() {
     </section>
 
     <section v-if="fontInfo && !isFontLoading" aria-label="Glyph display">
-      <GlyphDisplay v-model="text" editable :fontFamily="baseFontFamily" :resultFontFamily="resultFontFamily"
-        :resultText="activeTab === 'recombine' && recombineStyledFontFamily ? recombineChar : undefined" />
+      <GlyphDisplay v-model="text" editable :fontFamily="baseFontFamily" />
     </section>
 
     <section v-if="fontInfo && !isFontLoading" aria-label="Style">
@@ -272,16 +272,35 @@ function downloadFont() {
       <div class="container">
         <StyleButtons v-if="activeTab === 'style'" :isLoading="isAiLoading" :activeProperty="activeProperty"
           v-model:isColrEnabled="isColrEnabled" @style="onStyle" />
-        <BlendButtons v-else-if="activeTab === 'blend'" :isLoading="isAiLoading" :blendFontName="blendFontName"
-          :blendFontInfo="blendFontInfo" v-model:blendFactor="blendFactor" @upload="onBlendUpload" @blend="onBlend"
-          @removeBlendFont="onRemoveBlendFont" />
-        <RecombineButtons v-else-if="activeTab === 'recombine'" :isLoading="isAiLoading" :blendFontName="blendFontName"
-          :blendFontInfo="blendFontInfo" @upload="onBlendUpload" @recombine="onRecombine"
-          @removeBlendFont="onRemoveBlendFont" />
+        <BlendButtons v-else-if="activeTab === 'blend'" :secondFontInfo="secondFontInfo"
+          v-model:blendFactor="blendFactor" />
       </div>
+      <template v-if="activeTab !== 'style'">
+        <template v-if="!secondFontInfo">
+          <div class="container">
+            <FontUpload @upload="onBlendUpload" />
+          </div>
+        </template>
+        <template v-else>
+          <div class="container">
+            <FontBar :name="blendFontName ?? ''" :fontInfo="secondFontInfo" @clear="onRemoveBlendFont" />
+          </div>
+          <div class="container">
+            <GlyphDisplay v-model="text" :fontFamily="blendBaseFontFamily" />
+          </div>
+        </template>
+        <div class="container">
+          <button class="btn" :disabled="!secondFontInfo || isAiLoading"
+            @click="activeTab === 'blend' ? onBlend() : onRecombine()">Play</button>
+        </div>
+      </template>
       <p v-if="isAiLoading" aria-live="polite" class="loading">{{ activeTab === 'blend' ? 'Blending…' : activeTab ===
         'recombine' ? 'Recombining…' : 'Generating…' }}</p>
       <p v-else-if="aiError" role="alert" class="error">{{ aiError }}</p>
+    </section>
+
+    <section v-if="resultFontFamily" aria-label="Result">
+      <GlyphDisplay :modelValue="resultText" :fontFamily="resultFontFamily" />
     </section>
 
     <section class="export-section" v-if="activeDownloadBytes" aria-label="Export">

@@ -1,51 +1,23 @@
 <script setup lang="ts">
-import FontBar from '@/components/FontBar.vue'
-import FontUpload from '@/components/FontUpload.vue'
 import type { FontInfo } from '@/composables/useFontWasm'
 
 defineProps<{
-  isLoading?: boolean
-  blendFontName?: string | null
-  blendFontInfo?: FontInfo | null
+  secondFontInfo?: FontInfo | null
 }>()
 
 const blendFactor = defineModel<number>('blendFactor', { default: 0.5 })
-
-const emit = defineEmits<{
-  upload: [file: File]
-  blend: []
-  removeBlendFont: []
-}>()
 </script>
 
 <template>
-  <div class="blend-buttons">
-    <template v-if="!blendFontInfo">
-      <FontUpload @upload="(file) => emit('upload', file)" />
-    </template>
-    <template v-else>
-      <FontBar :name="blendFontName ?? ''" :fontInfo="blendFontInfo" @clear="emit('removeBlendFont')" />
-      <div class="slider-row">
-        <span class="text-size-m">A</span>
-        <input v-model.number="blendFactor" type="range" min="0" max="1" step="0.01" class="blend-slider"
-          aria-label="Blend factor" />
-        <span class="text-size-m">B</span>
-      </div>
-      <div>
-        <button class="btn" :disabled="isLoading" @click="emit('blend')">Play</button>
-      </div>
-    </template>
+  <div v-if="secondFontInfo" class="slider-row">
+    <span class="text-size-m">A</span>
+    <input v-model.number="blendFactor" type="range" min="0" max="1" step="0.01" class="blend-slider"
+      aria-label="Blend factor" />
+    <span class="text-size-m">B</span>
   </div>
 </template>
 
 <style scoped>
-.blend-buttons {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-
 .slider-row {
   display: flex;
   align-items: center;

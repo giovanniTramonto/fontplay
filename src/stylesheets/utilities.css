@@ -60,4 +60,8 @@
   .btn--secondary {
     background: var(--color-accent--secondary);
   }
+
+  .container {
+    margin: 1rem 0;
+  }
 }

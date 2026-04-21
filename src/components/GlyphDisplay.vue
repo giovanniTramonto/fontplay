@@ -4,8 +4,6 @@ import { DEFAULT_TEXT } from '#shared/constants'
 
 const props = defineProps<{
   fontFamily: string | null
-  resultFontFamily?: string | null
-  resultText?: string
   editable?: boolean
 }>()
 
@@ -54,56 +52,34 @@ watch(text, (val) => {
 </script>
 
 <template>
-  <div class="display-row" :class="{ 'display-row--split': resultFontFamily }">
-
-    <div class="display" :class="{ 'display--editable': editable }">
-      <div v-if="editable"
-        ref="editableEl"
-        class="display-text"
-        :class="{ 'display-text--plain': !fontFamily }"
-        :style="{ fontFamily: fontFamily ? `'${fontFamily}', sans-serif` : 'inherit', fontSize }"
-        contenteditable="plaintext-only"
-        spellcheck="false"
-        autocomplete="off"
-        :data-placeholder="'Type here…'"
-        @input="onInput"
-        @paste="onPaste"
-      ></div>
-      <template v-else>
-        <p v-if="text && fontFamily" class="display-text"
-          :style="{ fontFamily: `'${fontFamily}', sans-serif`, fontSize }">
-          {{ text }}
-        </p>
-        <p v-else-if="text" class="display-text display-text--plain" :style="{ fontSize }">
-          {{ text }}
-        </p>
-        <p v-else class="placeholder">Upload a font and type some text</p>
-      </template>
-      <button v-if="editable && isCustom" type="button" class="btn reset-btn" @click="onReset">Reset</button>
-    </div>
-
-    <div v-if="resultFontFamily" class="display" role="img" :aria-label="resultText ?? text">
-      <p v-if="resultText ?? text" class="display-text"
-        :style="{ fontFamily: `'${resultFontFamily}', sans-serif`, fontSize }">
-        {{ resultText ?? text }}
+  <div class="display" :class="{ 'display--editable': editable }">
+    <div v-if="editable"
+      ref="editableEl"
+      class="display-text"
+      :class="{ 'display-text--plain': !fontFamily }"
+      :style="{ fontFamily: fontFamily ? `'${fontFamily}', sans-serif` : 'inherit', fontSize }"
+      contenteditable="plaintext-only"
+      spellcheck="false"
+      autocomplete="off"
+      :data-placeholder="'Type here…'"
+      @input="onInput"
+      @paste="onPaste"
+    ></div>
+    <template v-else>
+      <p v-if="text && fontFamily" class="display-text"
+        :style="{ fontFamily: `'${fontFamily}', sans-serif`, fontSize }">
+        {{ text }}
+      </p>
+      <p v-else-if="text" class="display-text display-text--plain" :style="{ fontSize }">
+        {{ text }}
       </p>
       <p v-else class="placeholder">Upload a font and type some text</p>
-    </div>
+    </template>
+    <button v-if="editable && isCustom" type="button" class="btn reset-btn" @click="onReset">Reset</button>
   </div>
 </template>
 
 <style scoped>
-.display-row {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 1rem;
-}
-
-.display-row--split {
-  grid-template-columns: 1fr 1fr;
-  align-items: stretch;
-}
-
 .display {
   position: relative;
   background: var(--color-surface);
