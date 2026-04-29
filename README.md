@@ -8,14 +8,14 @@ fontplay applies AI-generated transforms and color effects to fonts — entirely
 
 ## Features
 
-### Mood
-Pick a mood (Modern, Cyber, Playful, Edgy, Cool) — the AI chooses geometric transforms (scale, shear, rotate, wave, …) and COLRv1 color effects (fill, gradient, shadow, 3D blocks, highlight, outline). The result is a fully styled font you can download.
+### Style
+Pick a style (Modern, Cyber, Playful, Edgy, Cool) — the AI chooses geometric transforms (scale, shear, rotate, wave, …) and COLRv1 color effects (fill, gradient, shadow, 3D blocks, highlight, outline). The result is a fully styled font you can download.
 
 ### Blend
 Upload a second font. The glyphs of both fonts are rasterised to canvas bitmaps and blended via SDF morphing in WASM. Use the slider to control the mix ratio.
 
-### Recombine
-Upload a second font. Claude Vision (or a local Ollama vision model) designs a hybrid SVG glyph for the first letter of your text by combining features from both letterforms. The path is parsed and injected into a new font file.
+### Splice
+Upload a second font. The AI slices each glyph horizontally into three zones and assigns each zone to one of the two fonts — creating a typographic hybrid. Choose an intensity (Low / Medium / High) to control how dramatically the fonts are mixed.
 
 ---
 
@@ -46,7 +46,7 @@ npm install
 npm run dev        # builds WASM + starts Vite dev server
 ```
 
-Copy `.env.example` → `.env` and set `VITE_OLLAMA_URL` + `VITE_OLLAMA_MODEL` for local AI. Use a vision-capable model (e.g. `llava`) to also enable the Recombine tab locally. Without the env vars, the app calls the Netlify Functions (requires deployment).
+Copy `.env.example` → `.env` and set `VITE_OLLAMA_URL` + `VITE_OLLAMA_MODEL` for local AI. Without the env vars, the app calls the Netlify Functions (requires deployment).
 
 ### Build
 
